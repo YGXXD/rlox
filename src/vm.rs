@@ -1,6 +1,6 @@
-use crate::value::*;
 use crate::chunk::*;
 use crate::compiler::*;
+use crate::value::Value;
 
 pub enum InterpretResult {
     Success,
@@ -26,8 +26,8 @@ pub struct VM {
 macro_rules! vm_binary_op {
     ($vm: expr, $op: tt) => {
         {
-            let a: Value = $vm.value_stack.pop().unwrap();
             let b: Value = $vm.value_stack.pop().unwrap();
+            let a: Value = $vm.value_stack.pop().unwrap();
             $vm.value_stack.push(a $op b);
         }
     };
@@ -42,11 +42,9 @@ impl VM {
     }
 
     pub fn interpret_source(&mut self, source: &str) -> InterpretResult {
-        match compiler_source(source) {
-            Some(chunk) => {
-                self.interpret_chunk(&chunk)
-            },
-            None => InterpretResult::CompileError,
+        match Compiler::compiler(source) {
+            Ok(chunk) => self.interpret_chunk(&chunk),
+            Err(result) => result,
         }
     }
 

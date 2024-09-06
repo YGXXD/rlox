@@ -1,3 +1,4 @@
+#[derive(PartialEq, Clone)]
 pub enum TokenType {
     // 单字符词法
     LeftParen = 0,
@@ -43,7 +44,13 @@ pub enum TokenType {
     While = 75,
     // 特殊词
     Eof = 254,
-    Error = 255
+    Error = 255,
+}
+
+impl Default for TokenType {
+    fn default() -> Self {
+        TokenType::Eof
+    }
 }
 
 impl ToString for TokenType {
@@ -88,22 +95,45 @@ impl ToString for TokenType {
             TokenType::Var => "Var".to_string(),
             TokenType::While => "While".to_string(),
             TokenType::Eof => "Eof".to_string(),
-            TokenType::Error => "Error".to_string()
+            TokenType::Error => "Error".to_string(),
         }
     }
 }
 
+#[derive(Default, Clone)]
 pub struct Token {
     pub r#type: TokenType,
     pub lexeme: String,
-    pub line: usize,
+    pub line: u32,
+}
+
+impl Token {
+    pub fn send_error(&self, message: &str) {
+        eprint!("[line {}] Error ", self.line);
+        match self.r#type {
+            TokenType::Eof => eprint!("at end"),
+            TokenType::Error => eprint!("{}", self.lexeme),
+            _ => eprint!("at {}", self.lexeme),
+        }
+        eprintln!(" : {}", message);
+    }
+
+    pub fn send_info(&self, message: &str) {
+        print!("[line {}] Info ", self.line);
+        match self.r#type {
+            TokenType::Eof => print!("at end"),
+            TokenType::Error => print!("{}", self.lexeme),
+            _ => eprint!("at {}", self.lexeme),
+        }
+        println!(" : {}", message);
+    }
 }
 
 pub struct Scanner<'a> {
     source: &'a str,
     start: usize,
     current: usize,
-    line: usize,
+    line: u32,
 }
 
 impl<'a> Scanner<'a> {
@@ -138,24 +168,24 @@ impl<'a> Scanner<'a> {
                     '/' => self.make_token(TokenType::Slash),
                     '!' => match self.r#match('=') {
                         true => self.make_token(TokenType::BangEqual),
-                        false => self.make_token(TokenType::Bang)
-                    }
+                        false => self.make_token(TokenType::Bang),
+                    },
                     '=' => match self.r#match('=') {
                         true => self.make_token(TokenType::EqualEqual),
-                        false => self.make_token(TokenType::Equal)
-                    }
+                        false => self.make_token(TokenType::Equal),
+                    },
                     '<' => match self.r#match('=') {
                         true => self.make_token(TokenType::LessEqual),
-                        false => self.make_token(TokenType::Less)
-                    }
+                        false => self.make_token(TokenType::Less),
+                    },
                     '>' => match self.r#match('=') {
                         true => self.make_token(TokenType::GreaterEqual),
-                        false => self.make_token(TokenType::Greater)
-                    }
+                        false => self.make_token(TokenType::Greater),
+                    },
                     '"' => self.string_token(),
                     '0'..='9' => self.number_token(),
                     'a'..='z' | 'A'..='Z' | '_' => self.identifier_token(),
-                    _ => self.error_token("unexpected character")
+                    _ => self.error_token("unexpected character"),
                 }
             }
         }
@@ -166,20 +196,20 @@ impl<'a> Scanner<'a> {
             match self.peek() {
                 ' ' | '\t' | '\r' => {
                     self.current = self.current + 1;
-                },
+                }
                 '\n' => {
                     self.line = self.line + 1;
-                    self.current = self.current + 1; 
-                },
+                    self.current = self.current + 1;
+                }
                 '/' => match self.peek_next() == '/' {
                     true => {
                         while !self.is_at_end() && self.peek() != '\n' {
                             self.current = self.current + 1;
                         }
-                    },
+                    }
                     false => break,
                 },
-                _ => break
+                _ => break,
             }
         }
     }
@@ -192,22 +222,20 @@ impl<'a> Scanner<'a> {
     fn r#match(&mut self, match_char: char) -> bool {
         match self.is_at_end() {
             true => false,
-            false => {
-                match self.source.chars().nth(self.current).unwrap() == match_char {
-                    true => {
-                        self.current = self.current + 1;
-                        true
-                    },
-                    false => false
-                } 
-            }
+            false => match self.source.chars().nth(self.current).unwrap() == match_char {
+                true => {
+                    self.current = self.current + 1;
+                    true
+                }
+                false => false,
+            },
         }
     }
 
     fn peek(&self) -> char {
         match self.source.chars().nth(self.current) {
             Some(c) => c,
-            None => '\0'
+            None => '\0',
         }
     }
 
@@ -223,7 +251,7 @@ impl<'a> Scanner<'a> {
         Token {
             r#type: token_type,
             lexeme: lexeme.to_string(),
-            line: self.line
+            line: self.line,
         }
     }
 
@@ -231,7 +259,7 @@ impl<'a> Scanner<'a> {
         Token {
             r#type: TokenType::Error,
             lexeme: error_info.to_string(),
-            line: self.line
+            line: self.line,
         }
     }
 
@@ -248,7 +276,7 @@ impl<'a> Scanner<'a> {
                 self.current = self.current + 1;
                 self.make_token(TokenType::String)
             }
-        } 
+        }
     }
 
     fn number_token(&mut self) -> Token {
@@ -286,7 +314,7 @@ impl<'a> Scanner<'a> {
             "class" => TokenType::Class,
             "this" => TokenType::This,
             "super" => TokenType::Super,
-            _ => TokenType::Identifier
+            _ => TokenType::Identifier,
         })
     }
 

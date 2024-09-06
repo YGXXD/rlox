@@ -1,19 +1,19 @@
 mod chunk;
 mod compiler;
+mod paser;
 mod scanner;
 mod value;
 mod vm;
 
 use std::path::PathBuf;
 
-use chunk::*;
-use vm::*;
 use compiler::*;
+use vm::*;
 
 fn interpret(byte_stream: &str) {
     println!("{}", byte_stream);
     println!("");
-    compiler_source(byte_stream);
+    Compiler::compiler(byte_stream);
 }
 
 fn repl() {
