@@ -1,6 +1,6 @@
 mod chunk;
 mod compiler;
-mod paser;
+// mod paser;
 mod scanner;
 mod value;
 mod vm;
@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use compiler::*;
 use vm::*;
 
-fn interpret(byte_stream: &str) {
+fn interpret(byte_stream: &String) {
     println!("{}", byte_stream);
     println!("");
-    Compiler::compiler(byte_stream);
+    Compiler::compile(byte_stream);
 }
 
 fn repl() {
@@ -21,8 +21,8 @@ fn repl() {
     loop {
         match std::io::stdin().read_line(&mut input) {
             Ok(_) => {
-                let line_stream = input.trim();
-                interpret(line_stream);
+                let line_stream = input.trim().to_string();
+                interpret(&line_stream);
                 input.clear();
             }
             Err(_) => {
@@ -33,7 +33,7 @@ fn repl() {
     }
 }
 
-fn run_file(file_path: &str) {
+fn run_file(file_path: &String) {
     let path: PathBuf = PathBuf::from(file_path);
     let data: Vec<u8> = std::fs::read(path).unwrap();
     let byte_stream: String = String::from_utf8(data).unwrap();

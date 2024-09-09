@@ -1,3 +1,4 @@
+use crate::chunk;
 use crate::chunk::*;
 use crate::compiler::*;
 use crate::value::Value;
@@ -18,31 +19,31 @@ impl ToString for InterpretResult {
     }
 }
 
-pub struct VM {
-    ip: usize,
-    value_stack: Vec<Value>,
-}
-
-macro_rules! vm_binary_op {
+macro_rules! binary_op {
     ($vm: expr, $op: tt) => {
         {
-            let b: Value = $vm.value_stack.pop().unwrap();
-            let a: Value = $vm.value_stack.pop().unwrap();
-            $vm.value_stack.push(a $op b);
+            let b: Value = $vm.stack.pop().unwrap();
+            let a: Value = $vm.stack.pop().unwrap();
+            $vm.stack.push(a $op b);
         }
     };
+}
+
+pub struct VM {
+    ip: usize,
+    stack: Vec<Value>,
 }
 
 impl VM {
     pub fn new() -> Self {
         VM {
             ip: 0,
-            value_stack: Vec::<Value>::new(),
+            stack: Vec::<Value>::new(),
         }
     }
 
-    pub fn interpret_source(&mut self, source: &str) -> InterpretResult {
-        match Compiler::compiler(source) {
+    pub fn interpret_source(&mut self, source: &String) -> InterpretResult {
+        match Compiler::compile(source) {
             Ok(chunk) => self.interpret_chunk(&chunk),
             Err(result) => result,
         }
@@ -50,8 +51,12 @@ impl VM {
 
     pub fn interpret_chunk(&mut self, chunk: &Chunk) -> InterpretResult {
         self.ip = 0;
-        self.value_stack.clear();
+        self.stack.clear();
         self.run(chunk)
+    }
+
+    pub fn reset_stack(&mut self) {
+        self.stack = Vec::<Value>::new();
     }
 
     fn run(&mut self, chunk: &Chunk) -> InterpretResult {
@@ -59,35 +64,45 @@ impl VM {
             loop {
                 #[cfg(debug_assertions)]
                 {
-                    for value in self.value_stack.iter() {
+                    for value in self.stack.iter() {
                         println!("|{:^12.6}|", value);
                     }
                     chunk.disassemble_instruction(self.ip);
                 }
-                let instruction: OpCode = chunk.read_code(self.ip).into();
-                self.ip = self.ip + 1;
+                let instruction: OpCode = self.read_byte(chunk);
                 match instruction {
                     OpCode::Return => {
-                        println!("{}", self.value_stack.pop().unwrap());
+                        println!("{}", self.stack.pop().unwrap());
                         break InterpretResult::Success;
                     }
                     OpCode::Constant => {
-                        let constant: Value =
-                            chunk.read_constant(chunk.read_code(self.ip) as usize);
-                        self.ip = self.ip + 1;
-                        self.value_stack.push(constant);
+                        let constant: Value = self.read_constant(chunk);
+                        self.stack.push(constant);
                     }
                     OpCode::Negate => {
-                        let value: Value = self.value_stack.pop().unwrap();
-                        self.value_stack.push(-value);
+                        let value: Value = self.stack.pop().unwrap();
+                        self.stack.push(-value);
                     }
-                    OpCode::Addition => vm_binary_op!(self, +),
-                    OpCode::Subtract => vm_binary_op!(self, -),
-                    OpCode::Multiply => vm_binary_op!(self, *),
-                    OpCode::Divide => vm_binary_op!(self, /),
+                    OpCode::Addition => binary_op!(self, +),
+                    OpCode::Subtract => binary_op!(self, -),
+                    OpCode::Multiply => binary_op!(self, *),
+                    OpCode::Divide => binary_op!(self, /),
                 }
             }
         };
         interpret_result
+    }
+
+    fn read_byte(&mut self, chunk: &Chunk) -> OpCode {
+        let byte: OpCode = chunk.read_code(self.ip).into();
+        self.ip += 1;
+        byte
+    }
+
+    fn read_constant(&mut self, chunk: &Chunk) -> Value {
+        let index: usize = chunk.read_code(self.ip) as usize;
+        let constant: Value = chunk.read_constant(index);
+        self.ip += 1;
+        constant
     }
 }

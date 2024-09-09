@@ -129,17 +129,17 @@ impl Token {
     }
 }
 
-pub struct Scanner<'a> {
-    source: &'a str,
+pub struct Scanner {
+    source: Vec<char>,
     start: usize,
     current: usize,
     line: u32,
 }
 
-impl<'a> Scanner<'a> {
-    pub fn new(source: &'a str) -> Self {
+impl Scanner {
+    pub fn new(source: &String) -> Self {
         Self {
-            source: source,
+            source: source.chars().collect(),
             start: 0,
             current: 0,
             line: 1,
@@ -150,10 +150,10 @@ impl<'a> Scanner<'a> {
         self.skip_white_space();
         self.start = self.current;
 
-        match self.is_at_end() {
-            true => self.make_token(TokenType::Eof),
-            false => {
-                let c: char = self.advance();
+        match self.peek() {
+            None => self.make_token(TokenType::Eof),
+            Some(c) => {
+                self.advance();
                 match c {
                     '(' => self.make_token(TokenType::LeftParen),
                     ')' => self.make_token(TokenType::RightParen),
@@ -194,63 +194,69 @@ impl<'a> Scanner<'a> {
     fn skip_white_space(&mut self) {
         loop {
             match self.peek() {
-                ' ' | '\t' | '\r' => {
-                    self.current = self.current + 1;
-                }
-                '\n' => {
-                    self.line = self.line + 1;
-                    self.current = self.current + 1;
-                }
-                '/' => match self.peek_next() == '/' {
-                    true => {
-                        while !self.is_at_end() && self.peek() != '\n' {
-                            self.current = self.current + 1;
-                        }
+                Some(c) => match c {
+                    ' ' | '\t' | '\r' => {
+                        self.advance();
                     }
-                    false => break,
+                    '\n' => {
+                        self.line += 1;
+                        self.advance();
+                    }
+                    '/' => match self.peek_next() {
+                        Some(pn) => match pn {
+                            '/' => {
+                                while self.peek().is_some() && self.peek().unwrap() != '\n' {
+                                    self.advance();
+                                }
+                            }
+                            _ => break,
+                        },
+                        None => break,
+                    },
+                    _ => break,
                 },
-                _ => break,
+                None => break,
             }
         }
     }
 
-    fn advance(&mut self) -> char {
-        self.current = self.current + 1;
-        self.source.chars().nth(self.current - 1).unwrap()
+    fn advance(&mut self) {
+        self.current += 1;
+    }
+
+    fn peek(&self) -> Option<char> {
+        match self.current < self.source.len() {
+            true => Some(self.source[self.current]),
+            false => None,
+        }
+    }
+
+    fn peek_next(&self) -> Option<char> {
+        match self.current + 1 < self.source.len() {
+            true => Some(self.source[self.current + 1]),
+            false => None,
+        }
     }
 
     fn r#match(&mut self, match_char: char) -> bool {
-        match self.is_at_end() {
-            true => false,
-            false => match self.source.chars().nth(self.current).unwrap() == match_char {
-                true => {
-                    self.current = self.current + 1;
+        match self.peek() {
+            Some(c) => {
+                if c == match_char {
+                    self.advance();
                     true
+                } else {
+                    false
                 }
-                false => false,
-            },
-        }
-    }
-
-    fn peek(&self) -> char {
-        match self.source.chars().nth(self.current) {
-            Some(c) => c,
-            None => '\0',
-        }
-    }
-
-    fn peek_next(&self) -> char {
-        match self.source.chars().nth(self.current + 1) {
-            Some(c) => c,
-            None => '\0',
+            }
+            None => false,
         }
     }
 
     fn make_token(&mut self, token_type: TokenType) -> Token {
-        let lexeme: &str = &self.source[self.start..self.current];
+        let lexeme: String = self.source[self.start..self.current].iter().collect();
         Token {
             r#type: token_type,
-            lexeme: lexeme.to_string(),
+            lexeme: lexeme,
             line: self.line,
         }
     }
@@ -264,40 +270,63 @@ impl<'a> Scanner<'a> {
     }
 
     fn string_token(&mut self) -> Token {
-        while !self.is_at_end() && self.peek() != '"' {
-            if self.peek() == '\n' {
-                self.line = self.line + 1;
+        loop {
+            let peek_char = self.peek();
+            match peek_char {
+                Some(c) => match c {
+                    '"' => break,
+                    '\n' => {
+                        self.line += 1;
+                        self.advance();
+                    }
+                    _ => self.advance(),
+                },
+                None => break,
             }
-            self.current = self.current + 1;
         }
-        match self.is_at_end() {
+        match self.peek().is_none() {
             true => self.error_token("unterminated string"),
             false => {
-                self.current = self.current + 1;
+                self.advance();
                 self.make_token(TokenType::String)
             }
         }
     }
 
     fn number_token(&mut self) -> Token {
-        while self.peek().is_ascii_digit() {
-            self.current = self.current + 1;
+        while self.peek().is_some() && self.peek().unwrap().is_ascii_digit() {
+            self.advance();
         }
-        if self.peek() == '.' && self.peek_next().is_ascii_digit() {
-            self.current = self.current + 2;
+        if self.peek().is_some()
+            && self.peek().unwrap() == '.'
+            && self.peek_next().is_some()
+            && self.peek_next().unwrap().is_ascii_digit()
+        {
+            self.current += 2;
+            while self.peek().is_some() && self.peek().unwrap().is_ascii_digit() {
+                self.advance();
+            }
         }
-        while self.peek().is_ascii_digit() {
-            self.current = self.current + 1;
-        }
+
         self.make_token(TokenType::Number)
     }
 
     fn identifier_token(&mut self) -> Token {
-        while self.peek().is_ascii_alphanumeric() || self.peek() == '_' {
-            self.current = self.current + 1;
+        loop {
+            let peek_char = self.peek();
+            match peek_char {
+                Some(c) => {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                },
+                None => break
+            }
         }
-        let keyword: &str = &self.source[self.start..self.current];
-        self.make_token(match keyword {
+        let keyword: String = self.source[self.start..self.current].iter().collect();
+        self.make_token(match keyword.as_str() {
             "var" => TokenType::Var,
             "nil" => TokenType::Nil,
             "true" => TokenType::True,
@@ -316,9 +345,5 @@ impl<'a> Scanner<'a> {
             "super" => TokenType::Super,
             _ => TokenType::Identifier,
         })
-    }
-
-    fn is_at_end(&self) -> bool {
-        self.current >= self.source.len()
     }
 }

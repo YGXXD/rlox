@@ -48,7 +48,7 @@ impl From<TokenType> for Precedence {
             TokenType::Plus | TokenType::Minus => Self::Team,
             TokenType::Star | TokenType::Slash => Self::Factor,
             TokenType::Number => Self::Assignment,
-            _ => Self::None
+            _ => Self::None,
         }
     }
 }
@@ -59,7 +59,7 @@ pub struct Parser<'a, 'b> {
     pub current: Token,
     pub previous: Token,
     pub scanner: &'a mut Scanner<'b>,
-    pub chunk: &'a mut Chunk
+    pub chunk: &'a mut Chunk,
 }
 
 impl<'a, 'b> Parser<'a, 'b> {
@@ -70,7 +70,7 @@ impl<'a, 'b> Parser<'a, 'b> {
             current: Token::default(),
             previous: Token::default(),
             scanner: scanner,
-            chunk: chunk
+            chunk: chunk,
         }
     }
 
@@ -119,7 +119,8 @@ impl<'a, 'b> Parser<'a, 'b> {
     }
 
     fn number(&mut self) {
-        self.chunk.write_code(OpCode::Constant.into(), self.previous.line);
+        self.chunk
+            .write_code(OpCode::Constant.into(), self.previous.line);
         let value: Value = self.previous.lexeme.parse().expect("Failed to parse float");
         let idx = self.chunk.add_constant(value);
         match idx > 0xff {
@@ -140,7 +141,9 @@ impl<'a, 'b> Parser<'a, 'b> {
         let token_type: TokenType = self.previous.r#type.clone();
         self.parse_precedence(Precedence::Unary);
         match token_type {
-            TokenType::Minus => self.chunk.write_code(OpCode::Negate.into(), self.previous.line),
+            TokenType::Minus => self
+                .chunk
+                .write_code(OpCode::Negate.into(), self.previous.line),
             _ => return,
         }
     }
@@ -151,11 +154,19 @@ impl<'a, 'b> Parser<'a, 'b> {
         self.parse_precedence((u8::from(precedence) + 1).into());
 
         match token_type {
-            TokenType::Plus => self.chunk.write_code(OpCode::Addition.into(), self.previous.line),
-            TokenType::Minus => self.chunk.write_code(OpCode::Subtract.into(), self.previous.line), 
-            TokenType::Star => self.chunk.write_code(OpCode::Multiply.into(), self.previous.line),
-            TokenType::Slash => self.chunk.write_code(OpCode::Divide.into(), self.previous.line),
-            _ => return
+            TokenType::Plus => self
+                .chunk
+                .write_code(OpCode::Addition.into(), self.previous.line),
+            TokenType::Minus => self
+                .chunk
+                .write_code(OpCode::Subtract.into(), self.previous.line),
+            TokenType::Star => self
+                .chunk
+                .write_code(OpCode::Multiply.into(), self.previous.line),
+            TokenType::Slash => self
+                .chunk
+                .write_code(OpCode::Divide.into(), self.previous.line),
+            _ => return,
         }
     }
 
@@ -167,15 +178,18 @@ impl<'a, 'b> Parser<'a, 'b> {
             TokenType::Minus => self.unary(),
             _ => {
                 self.error_at_previous("Expect expression");
-                return
+                return;
             }
         }
-        
-        while u8::from(precedence.clone()) <= Precedence::from(self.previous.r#type.clone()).into() {
+
+        while u8::from(precedence.clone()) <= Precedence::from(self.previous.r#type.clone()).into()
+        {
             self.advance();
             match self.previous.r#type {
-                TokenType::Plus | TokenType::Minus | TokenType::Star | TokenType::Slash => self.binary(), 
-                _ => continue
+                TokenType::Plus | TokenType::Minus | TokenType::Star | TokenType::Slash => {
+                    self.binary()
+                }
+                _ => continue,
             }
         }
     }
