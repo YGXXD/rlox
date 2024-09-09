@@ -1,10 +1,9 @@
-use crate::chunk;
 use crate::chunk::*;
 use crate::compiler::*;
 use crate::value::Value;
 
 pub enum InterpretResult {
-    Success,
+    Success = 0,
     CompileError,
     RuntimeError,
 }
@@ -43,7 +42,8 @@ impl VM {
     }
 
     pub fn interpret_source(&mut self, source: &String) -> InterpretResult {
-        match Compiler::compile(source) {
+        let mut compiler: Compiler = Compiler::new();
+        match compiler.compile(source) {
             Ok(chunk) => self.interpret_chunk(&chunk),
             Err(result) => result,
         }

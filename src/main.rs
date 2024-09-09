@@ -2,6 +2,7 @@ mod chunk;
 mod compiler;
 // mod paser;
 mod scanner;
+mod token;
 mod value;
 mod vm;
 
@@ -13,7 +14,8 @@ use vm::*;
 fn interpret(byte_stream: &String) {
     println!("{}", byte_stream);
     println!("");
-    Compiler::compile(byte_stream);
+    let mut compiler: Compiler = Compiler::new();
+    let _ = compiler.compile(byte_stream);
 }
 
 fn repl() {

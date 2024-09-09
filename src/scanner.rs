@@ -1,133 +1,4 @@
-#[derive(PartialEq, Clone)]
-pub enum TokenType {
-    // 单字符词法
-    LeftParen = 0,
-    RightParen = 1,
-    LeftBrace = 2,
-    RightBrace = 3,
-    Comma = 4,
-    Dot = 5,
-    Minus = 6,
-    Plus = 7,
-    Semicolon = 8,
-    Slash = 9,
-    Star = 10,
-    // 一或两字符词法
-    Bang = 20,
-    BangEqual = 21,
-    Equal = 22,
-    EqualEqual = 23,
-    Greater = 24,
-    GreaterEqual = 25,
-    Less = 26,
-    LessEqual = 27,
-    // 字面量
-    Identifier = 40,
-    String = 41,
-    Number = 42,
-    // 关键字
-    And = 60,
-    Class = 61,
-    Else = 62,
-    False = 63,
-    For = 64,
-    Fun = 65,
-    If = 66,
-    Nil = 67,
-    Or = 68,
-    Print = 69,
-    Return = 70,
-    Super = 71,
-    This = 72,
-    True = 73,
-    Var = 74,
-    While = 75,
-    // 特殊词
-    Eof = 254,
-    Error = 255,
-}
-
-impl Default for TokenType {
-    fn default() -> Self {
-        TokenType::Eof
-    }
-}
-
-impl ToString for TokenType {
-    fn to_string(&self) -> String {
-        match self {
-            TokenType::LeftParen => "LeftParen".to_string(),
-            TokenType::RightParen => "RightParen".to_string(),
-            TokenType::LeftBrace => "LeftBrace".to_string(),
-            TokenType::RightBrace => "RightBrace".to_string(),
-            TokenType::Comma => "Comma".to_string(),
-            TokenType::Dot => "Dot".to_string(),
-            TokenType::Minus => "Minus".to_string(),
-            TokenType::Plus => "Plus".to_string(),
-            TokenType::Semicolon => "Semicolon".to_string(),
-            TokenType::Slash => "Slash".to_string(),
-            TokenType::Star => "Star".to_string(),
-            TokenType::Bang => "Bang".to_string(),
-            TokenType::BangEqual => "BangEqual".to_string(),
-            TokenType::Equal => "Equal".to_string(),
-            TokenType::EqualEqual => "EqualEqual".to_string(),
-            TokenType::Greater => "Greater".to_string(),
-            TokenType::GreaterEqual => "GreaterEqual".to_string(),
-            TokenType::Less => "Less".to_string(),
-            TokenType::LessEqual => "LessEqual".to_string(),
-            TokenType::Identifier => "Identifier".to_string(),
-            TokenType::String => "String".to_string(),
-            TokenType::Number => "Number".to_string(),
-            TokenType::And => "And".to_string(),
-            TokenType::Class => "Class".to_string(),
-            TokenType::Else => "Else".to_string(),
-            TokenType::False => "False".to_string(),
-            TokenType::For => "For".to_string(),
-            TokenType::Fun => "Fun".to_string(),
-            TokenType::If => "If".to_string(),
-            TokenType::Nil => "Nil".to_string(),
-            TokenType::Or => "Or".to_string(),
-            TokenType::Print => "Print".to_string(),
-            TokenType::Return => "Return".to_string(),
-            TokenType::Super => "Super".to_string(),
-            TokenType::This => "This".to_string(),
-            TokenType::True => "True".to_string(),
-            TokenType::Var => "Var".to_string(),
-            TokenType::While => "While".to_string(),
-            TokenType::Eof => "Eof".to_string(),
-            TokenType::Error => "Error".to_string(),
-        }
-    }
-}
-
-#[derive(Default, Clone)]
-pub struct Token {
-    pub r#type: TokenType,
-    pub lexeme: String,
-    pub line: u32,
-}
-
-impl Token {
-    pub fn send_error(&self, message: &str) {
-        eprint!("[line {}] Error ", self.line);
-        match self.r#type {
-            TokenType::Eof => eprint!("at end"),
-            TokenType::Error => eprint!("{}", self.lexeme),
-            _ => eprint!("at {}", self.lexeme),
-        }
-        eprintln!(" : {}", message);
-    }
-
-    pub fn send_info(&self, message: &str) {
-        print!("[line {}] Info ", self.line);
-        match self.r#type {
-            TokenType::Eof => print!("at end"),
-            TokenType::Error => print!("{}", self.lexeme),
-            _ => eprint!("at {}", self.lexeme),
-        }
-        println!(" : {}", message);
-    }
-}
+use crate::token::*;
 
 pub struct Scanner {
     source: Vec<char>,
@@ -137,13 +8,20 @@ pub struct Scanner {
 }
 
 impl Scanner {
-    pub fn new(source: &String) -> Self {
+    pub fn new() -> Self {
         Self {
-            source: source.chars().collect(),
+            source: Vec::default(),
             start: 0,
             current: 0,
             line: 1,
         }
+    }
+
+    pub fn reset(&mut self, source: &String) {
+        self.source = source.chars().collect();
+        self.start = 0;
+        self.current = 0;
+        self.line = 1;
     }
 
     pub fn scan_token(&mut self) -> Token {
@@ -321,8 +199,8 @@ impl Scanner {
                     } else {
                         break;
                     }
-                },
-                None => break
+                }
+                None => break,
             }
         }
         let keyword: String = self.source[self.start..self.current].iter().collect();

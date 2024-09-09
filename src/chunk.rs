@@ -2,12 +2,12 @@ use crate::value::Value;
 
 pub enum OpCode {
     Return = 0,
-    Constant = 1,
-    Negate = 2,
-    Addition = 3,
-    Subtract = 4,
-    Multiply = 5,
-    Divide = 6,
+    Constant,
+    Negate,
+    Addition,
+    Subtract,
+    Multiply,
+    Divide,
 }
 
 impl From<OpCode> for u8 {
