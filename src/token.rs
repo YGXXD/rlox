@@ -122,6 +122,7 @@ impl Token {
             _ => eprint!("at {}", self.lexeme),
         }
         eprintln!(" : {}", message);
+        std::process::exit(65);
     }
 
     pub fn info(&self, message: &str) {

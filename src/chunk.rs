@@ -65,9 +65,14 @@ impl Chunk {
         self.lines.push(line);
     }
 
-    pub fn add_constant(&mut self, value: Value) -> usize {
-        self.constants.push(value);
-        self.constants.len() - 1
+    pub fn add_constant(&mut self, value: Value) -> Result<usize, &str> {
+        match self.constants.len() < 0x100 {
+            true => {
+                self.constants.push(value);
+                Ok(self.constants.len() - 1)
+            }
+            false => Err("Too many constants in one chunk"),
+        }
     }
 
     pub fn clear(&mut self) {
