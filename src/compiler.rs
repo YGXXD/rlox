@@ -1,7 +1,6 @@
 use crate::chunk::*;
 use crate::scanner::*;
 use crate::token::*;
-use crate::InterpretResult;
 
 #[derive(PartialEq, PartialOrd, Copy, Clone)]
 enum Precedence {
@@ -69,7 +68,7 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
         precedence: Precedence::None,
     };
     vec[TokenType::Plus as usize] = ParseRule {
-        prefix: Some(Compiler::parse_unary),
+        prefix: None,
         infix: Some(Compiler::parse_binary),
         precedence: Precedence::Term,
     };
@@ -93,6 +92,21 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
         infix: None,
         precedence: Precedence::None,
     };
+    vec[TokenType::Nil as usize] = ParseRule {
+        prefix: Some(Compiler::parse_literal),
+        infix: None,
+        precedence: Precedence::None,
+    };
+    vec[TokenType::True as usize] = ParseRule {
+        prefix: Some(Compiler::parse_literal),
+        infix: None,
+        precedence: Precedence::None,
+    };
+    vec[TokenType::False as usize] = ParseRule {
+        prefix: Some(Compiler::parse_literal),
+        infix: None,
+        precedence: Precedence::None,
+    };
     vec
 };
 
@@ -101,6 +115,7 @@ pub struct Compiler {
     chunk: Chunk,
     current: Token,
     previous: Token,
+    had_error: std::cell::RefCell<bool>,
 }
 
 impl Compiler {
@@ -110,15 +125,17 @@ impl Compiler {
             chunk: Chunk::new(),
             current: Token::default(),
             previous: Token::default(),
+            had_error: std::cell::RefCell::<bool>::new(false)
         }
     }
 
-    pub fn compile(&mut self, source: &String) -> Result<&Chunk, InterpretResult> {
+    pub fn compile(&mut self, source: &String) -> Result<&Chunk, String> {
         self.scanner.reset(source);
         self.advance();
         self.parse_expression();
         self.consume(TokenType::Eof, "Expect end of expression");
-        self.chunk.write_code(OpCode::Return.into(), self.previous.line);
+        self.chunk
+            .write_code(OpCode::Return.into(), self.previous.line);
 
         // loop {
         //     let token = self.scanner.scan_token();
@@ -134,9 +151,26 @@ impl Compiler {
         //     }
         // }
 
-        self.chunk.disassemble("chunk");
+        // self.chunk.disassemble("chunk");
+        // println!("");
+
+        if *self.had_error.borrow() {
+            Err("Compile error".to_string())
+        } else {
+            Ok(&self.chunk)
+        }
         
-        Ok(&self.chunk)
+    }
+
+    fn compile_error(&self, token: &Token, message: &str) {
+        eprint!("[line {}] Error ", token.line);
+        match token.r#type {
+            TokenType::Eof => eprint!("at end"),
+            TokenType::Error => eprint!("{}", token.lexeme),
+            _ => eprint!("at '{}", token.lexeme),
+        }
+        eprintln!(" : {}", message);
+        self.had_error.replace(true);
     }
 
     fn advance(&mut self) {
@@ -144,7 +178,7 @@ impl Compiler {
         loop {
             self.current = self.scanner.scan_token();
             match self.current.r#type {
-                TokenType::Error => self.current.error("Scan Lex error"),
+                TokenType::Error => self.compile_error(&self.current, "Scan Lex error"),
                 _ => break,
             }
         }
@@ -153,12 +187,15 @@ impl Compiler {
     fn consume(&mut self, token_type: TokenType, message: &str) {
         match self.current.r#type == token_type {
             true => self.advance(),
-            false => self.current.error(message),
+            false => self.compile_error(&self.current, message),
         }
     }
 
     fn parse_expression(&mut self) {
-        self.parse_precedence(Precedence::Assignment);
+        match self.current.r#type != TokenType::Eof {
+            true => self.parse_precedence(Precedence::Assignment),
+            false => return,
+        }
     }
 
     fn parse_grouping(&mut self) {
@@ -170,11 +207,11 @@ impl Compiler {
         self.chunk
             .write_code(OpCode::Constant.into(), self.previous.line);
         match self.previous.lexeme.parse::<f64>() {
-            Ok(value) => match self.chunk.add_constant(value) {
+            Ok(number) => match self.chunk.add_constant(number) {
                 Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
-                Err(e) => self.previous.error(e),
+                Err(e) => self.compile_error(&self.previous, &e),
             },
-            Err(_) => self.previous.error("Expect number Error"),
+            Err(_) => self.compile_error(&self.previous, "Expect number Error"),
         };
     }
 
@@ -183,11 +220,10 @@ impl Compiler {
         self.parse_precedence(Precedence::Unary);
 
         match unary_token.r#type {
-            TokenType::Plus => return,
             TokenType::Minus => self
                 .chunk
                 .write_code(OpCode::Negate.into(), unary_token.line),
-            _ => unary_token.error("Expect unary Error"),
+            _ => self.compile_error(&unary_token, "Expect unary Error"),
         }
     }
 
@@ -212,7 +248,22 @@ impl Compiler {
             TokenType::Slash => self
                 .chunk
                 .write_code(OpCode::Divide.into(), binary_token.line),
-            _ => binary_token.error("Expect binary Error"),
+            _ => self.compile_error(&binary_token, "Expect binary Error"),
+        }
+    }
+
+    fn parse_literal(&mut self) {
+        match self.previous.r#type {
+            TokenType::Nil => self.
+                chunk.
+                write_code(OpCode::Nil.into(), self.previous.line),
+            TokenType::True => self.
+                chunk.
+                write_code(OpCode::True.into(), self.previous.line),
+            TokenType::False => self.
+                chunk.
+                write_code(OpCode::False.into(), self.previous.line),
+            _ => self.compile_error(&self.previous, "Expect literal Error"),
         }
     }
 
@@ -222,7 +273,7 @@ impl Compiler {
         // prefix
         match PARSE_RULES[Into::<usize>::into(self.previous.r#type.clone())].prefix {
             Some(parse_fn) => parse_fn(self),
-            None => self.previous.error("Expect error"),
+            None => self.compile_error(&self.previous, "Expect prefix error"),
         }
 
         // infix
@@ -241,35 +292,4 @@ impl Compiler {
             }
         }
     }
-
-    // pub fn compiler(source: &str) -> Result<Chunk, InterpretResult> {
-    //     let mut scanner: Scanner = Scanner::new(source);
-    //     let mut chunk: Chunk = Chunk::new();
-    //     let mut paser = Parser::new(&mut scanner, &mut chunk);
-
-    //     // loop {
-    //     //     let token = paser.scanner.scan_token();
-    //     //     println!("{}    {}    {}", token.line, token.r#type.to_string(), token.lexeme);
-    //     //     match token.r#type {
-    //     //         TokenType::Eof | TokenType::Error => break,
-    //     //         _ => continue
-    //     //     }
-    //     // }
-
-    //     paser.advance();
-    //     paser.expression();
-    //     paser.consume(TokenType::Eof, "Expect end of expression");
-    //     paser
-    //         .chunk
-    //         .write_code(OpCode::Return.into(), paser.previous.line);
-    //     paser.chunk.disassemble("test");
-
-    //     let mut vm = VM::new();
-    //     vm.interpret_chunk(&paser.chunk);
-
-    //     match paser.had_error {
-    //         true => Ok(chunk),
-    //         false => Err(InterpretResult::CompileError),
-    //     }
-    // }
 }

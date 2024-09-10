@@ -6,7 +6,6 @@ mod token;
 mod value;
 mod vm;
 
-use compiler::*;
 use vm::*;
 
 fn interpret(byte_stream: &String) {

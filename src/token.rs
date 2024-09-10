@@ -112,26 +112,3 @@ pub struct Token {
     pub lexeme: String,
     pub line: u32,
 }
-
-impl Token {
-    pub fn error(&self, message: &str) {
-        eprint!("[line {}] Error ", self.line);
-        match self.r#type {
-            TokenType::Eof => eprint!("at end"),
-            TokenType::Error => eprint!("{}", self.lexeme),
-            _ => eprint!("at {}", self.lexeme),
-        }
-        eprintln!(" : {}", message);
-        std::process::exit(65);
-    }
-
-    pub fn info(&self, message: &str) {
-        print!("[line {}] Info ", self.line);
-        match self.r#type {
-            TokenType::Eof => print!("at end"),
-            TokenType::Error => print!("{}", self.lexeme),
-            _ => eprint!("at {}", self.lexeme),
-        }
-        println!(" : {}", message);
-    }
-}

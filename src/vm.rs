@@ -18,19 +18,47 @@ impl ToString for InterpretResult {
     }
 }
 
-macro_rules! binary_op {
-    ($vm: expr, $op: tt) => {
+pub struct VM {
+    ip: usize,
+    stack: Vec<Value>,
+}
+
+macro_rules! number_unary_op {
+    ($vm: expr, $chunk: expr, $op: tt, $msg: tt) => {
         {
-            let b: Value = $vm.stack.pop().unwrap();
-            let a: Value = $vm.stack.pop().unwrap();
-            $vm.stack.push(a $op b);
+            let top = &$vm.stack[$vm.stack.len() - 1];
+            match top.is_number() {
+                true => {
+                    let value = $vm.stack.pop().unwrap();
+                    $vm.stack.push($op value);
+                },
+                false => {
+                    let message = format!("{} op must be a number", $msg);
+                    $vm.runtime_error($chunk, &message);
+                    break InterpretResult::RuntimeError
+                },
+            }
         }
     };
 }
 
-pub struct VM {
-    ip: usize,
-    stack: Vec<Value>,
+macro_rules! number_binary_op {
+    ($vm: expr, $chunk: expr, $op: tt, $msg: tt) => {
+        {
+            match ($vm.stack[$vm.stack.len() - 1], $vm.stack[$vm.stack.len() - 2]) {
+                (Value::Number(_), Value::Number(_)) => {
+                    let b: Value = $vm.stack.pop().unwrap();
+                    let a: Value = $vm.stack.pop().unwrap();
+                    $vm.stack.push(a $op b);
+                }
+                _ => {
+                    let message = format!("{} op must between tow numbers", $msg);
+                    $vm.runtime_error($chunk, &message);
+                    break InterpretResult::RuntimeError
+                }
+            }
+        }
+    };
 }
 
 impl VM {
@@ -45,7 +73,7 @@ impl VM {
         let mut compiler: Compiler = Compiler::new();
         match compiler.compile(source) {
             Ok(chunk) => self.interpret_chunk(&chunk),
-            Err(result) => result,
+            Err(_) => InterpretResult::CompileError,
         }
     }
 
@@ -65,28 +93,30 @@ impl VM {
                 #[cfg(debug_assertions)]
                 {
                     for value in self.stack.iter() {
-                        println!("|{:^12.6}|", value);
+                        println!("|{:^12.6}|", value.to_string());
                     }
                     chunk.disassemble_instruction(self.ip);
                 }
                 let instruction: OpCode = self.read_byte(chunk);
                 match instruction {
                     OpCode::Return => {
-                        println!("{}", self.stack.pop().unwrap());
+                        if let Some(value) = self.stack.pop() {
+                            println!("{}", value.to_string());
+                        }
                         break InterpretResult::Success;
                     }
                     OpCode::Constant => {
                         let constant: Value = self.read_constant(chunk);
                         self.stack.push(constant);
                     }
-                    OpCode::Negate => {
-                        let value: Value = self.stack.pop().unwrap();
-                        self.stack.push(-value);
-                    }
-                    OpCode::Addition => binary_op!(self, +),
-                    OpCode::Subtract => binary_op!(self, -),
-                    OpCode::Multiply => binary_op!(self, *),
-                    OpCode::Divide => binary_op!(self, /),
+                    OpCode::Nil => self.stack.push(Value::Nil),
+                    OpCode::True => self.stack.push(Value::Bool(true)),
+                    OpCode::False => self.stack.push(Value::Bool(false)),
+                    OpCode::Negate => number_unary_op!(self, chunk, -, "negate"),
+                    OpCode::Addition => number_binary_op!(self, chunk, +, "add"),
+                    OpCode::Subtract => number_binary_op!(self, chunk, -, "sub"),
+                    OpCode::Multiply => number_binary_op!(self, chunk, *, "mul"),
+                    OpCode::Divide => number_binary_op!(self, chunk, /, "div"),
                 }
             }
         };
@@ -101,8 +131,13 @@ impl VM {
 
     fn read_constant(&mut self, chunk: &Chunk) -> Value {
         let index: usize = chunk.read_code(self.ip) as usize;
-        let constant: Value = chunk.read_constant(index);
+        let number: f64 = chunk.read_constant(index);
         self.ip += 1;
-        constant
+        Value::Number(number)
+    }
+
+    fn runtime_error(&mut self, chunk: &Chunk, message: &str) {
+        eprintln!("{} : [line {}] in script", message, chunk.read_line(self.ip - 1));
+        self.reset_stack()
     }
 }

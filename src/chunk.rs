@@ -1,8 +1,10 @@
-use crate::value::Value;
-
 pub enum OpCode {
     Return = 0,
     Constant,
+    Nil,
+    True,
+    False,
+    Not,
     Negate,
     Addition,
     Subtract,
@@ -21,11 +23,15 @@ impl From<u8> for OpCode {
         match value {
             0 => Self::Return,
             1 => Self::Constant,
-            2 => Self::Negate,
-            3 => Self::Addition,
-            4 => Self::Subtract,
-            5 => Self::Multiply,
-            6 => Self::Divide,
+            2 => Self::Nil,
+            3 => Self::True,
+            4 => Self::False,
+            5 => Self::Not,
+            6 => Self::Negate,
+            7 => Self::Addition,
+            8 => Self::Subtract,
+            9 => Self::Multiply,
+            10 => Self::Divide,
             _ => unimplemented!("Invalid OpCode"),
         }
     }
@@ -34,20 +40,24 @@ impl From<u8> for OpCode {
 impl ToString for OpCode {
     fn to_string(&self) -> String {
         match self {
-            OpCode::Return => "OP_RETURN".to_string(),
-            OpCode::Constant => "OP_CONSTANT".to_string(),
-            OpCode::Negate => "OP_NEGATE".to_string(),
-            OpCode::Addition => "OP_ADDITION".to_string(),
-            OpCode::Subtract => "OP_SUBTRACT".to_string(),
-            OpCode::Multiply => "OP_MULTIPLY".to_string(),
-            OpCode::Divide => "OP_DIVIDE".to_string(),
+            Self::Return => "OP_RETURN".to_string(),
+            Self::Constant => "OP_CONSTANT".to_string(),
+            Self::Nil => "OP_NIL".to_string(),
+            Self::True => "OP_TRUE".to_string(),
+            Self::False => "OP_FALSE".to_string(),
+            Self::Not => "OP_NOT".to_string(),
+            Self::Negate => "OP_NEGATE".to_string(),
+            Self::Addition => "OP_ADDITION".to_string(),
+            Self::Subtract => "OP_SUBTRACT".to_string(),
+            Self::Multiply => "OP_MULTIPLY".to_string(),
+            Self::Divide => "OP_DIVIDE".to_string(),
         }
     }
 }
 
 pub struct Chunk {
     code: Vec<u8>,
-    constants: Vec<Value>,
+    constants: Vec<f64>,
     lines: Vec<u32>,
 }
 
@@ -55,7 +65,7 @@ impl Chunk {
     pub fn new() -> Self {
         Self {
             code: Vec::<u8>::new(),
-            constants: Vec::<Value>::new(),
+            constants: Vec::<f64>::new(),
             lines: Vec::<u32>::new(),
         }
     }
@@ -65,13 +75,13 @@ impl Chunk {
         self.lines.push(line);
     }
 
-    pub fn add_constant(&mut self, value: Value) -> Result<usize, &str> {
+    pub fn add_constant(&mut self, number: f64) -> Result<usize, String> {
         match self.constants.len() < 0x100 {
             true => {
-                self.constants.push(value);
+                self.constants.push(number);
                 Ok(self.constants.len() - 1)
             }
-            false => Err("Too many constants in one chunk"),
+            false => Err("Too many constants in one chunk".to_string()),
         }
     }
 
@@ -81,15 +91,28 @@ impl Chunk {
         self.lines.clear();
     }
 
-    pub fn read_code(&self, idx: usize) -> u8 {
-        self.code[idx]
+    pub fn read_code(&self, offset: usize) -> u8 {
+        self.code[offset]
     }
 
-    pub fn read_constant(&self, idx: usize) -> Value {
-        self.constants[idx]
+    pub fn read_constant(&self, offset: usize) -> f64 {
+        self.constants[offset]
     }
 
-    pub fn disassemble(&self, disassemble_name: &str) {
+    pub fn read_line(&self, offset: usize) -> u32 {
+        self.lines[offset]
+    }
+}
+
+pub trait Disassemble {
+    fn disassemble(&self, disassemble_name: &str);
+    fn disassemble_instruction(&self, offset: usize) -> usize;
+    fn simple_instruction(&self, instruction: OpCode, offset: usize) -> usize;
+    fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize;
+}
+
+impl Disassemble for Chunk {
+    fn disassemble(&self, disassemble_name: &str) {
         println!("== {} ==", disassemble_name);
 
         let mut offset: usize = 0;
@@ -98,11 +121,15 @@ impl Chunk {
         }
     }
 
-    pub fn disassemble_instruction(&self, offset: usize) -> usize {
+    fn disassemble_instruction(&self, offset: usize) -> usize {
         let instruction: OpCode = self.code[offset].into();
         match instruction {
             OpCode::Return => self.simple_instruction(instruction, offset),
             OpCode::Constant => self.constant_instruction(instruction, offset),
+            OpCode::Nil => self.simple_instruction(instruction, offset),
+            OpCode::True => self.simple_instruction(instruction, offset),
+            OpCode::False => self.simple_instruction(instruction, offset),
+            OpCode::Not => self.simple_instruction(instruction, offset),
             OpCode::Negate => self.simple_instruction(instruction, offset),
             OpCode::Addition => self.simple_instruction(instruction, offset),
             OpCode::Subtract => self.simple_instruction(instruction, offset),
@@ -111,7 +138,7 @@ impl Chunk {
         }
     }
 
-    pub fn simple_instruction(&self, instruction: OpCode, offset: usize) -> usize {
+    fn simple_instruction(&self, instruction: OpCode, offset: usize) -> usize {
         println!(
             "line:{}  code:{}    {}    ",
             self.lines[offset],
@@ -121,14 +148,14 @@ impl Chunk {
         offset + 1
     }
 
-    pub fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize {
-        let constant_idx: usize = self.code[offset + 1].into();
+    fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize {
+        let constant_offset: usize = self.code[offset + 1].into();
         println!(
             "line:{}  code:{}    {}    {}",
             self.lines[offset],
             offset,
             instruction.to_string(),
-            self.constants[constant_idx]
+            self.constants[constant_offset].to_string()
         );
         offset + 2
     }
