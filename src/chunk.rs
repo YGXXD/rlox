@@ -10,6 +10,9 @@ pub enum OpCode {
     Subtract,
     Multiply,
     Divide,
+    Equal,
+    Greater,
+    Less,
 }
 
 impl From<OpCode> for u8 {
@@ -32,6 +35,9 @@ impl From<u8> for OpCode {
             8 => Self::Subtract,
             9 => Self::Multiply,
             10 => Self::Divide,
+            11 => Self::Equal,
+            12 => Self::Greater,
+            13 => Self::Less,
             _ => unimplemented!("Invalid OpCode"),
         }
     }
@@ -51,6 +57,9 @@ impl ToString for OpCode {
             Self::Subtract => "OP_SUBTRACT".to_string(),
             Self::Multiply => "OP_MULTIPLY".to_string(),
             Self::Divide => "OP_DIVIDE".to_string(),
+            Self::Equal => "OP_EQUAL".to_string(),
+            Self::Greater => "OP_GREATER".to_string(),
+            Self::Less => "OP_LESS".to_string(),
         }
     }
 }
@@ -135,6 +144,9 @@ impl Disassemble for Chunk {
             OpCode::Subtract => self.simple_instruction(instruction, offset),
             OpCode::Multiply => self.simple_instruction(instruction, offset),
             OpCode::Divide => self.simple_instruction(instruction, offset),
+            OpCode::Equal => self.simple_instruction(instruction, offset),
+            OpCode::Greater => self.simple_instruction(instruction, offset),
+            OpCode::Less => self.simple_instruction(instruction, offset),
         }
     }
 

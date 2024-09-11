@@ -23,42 +23,31 @@ pub struct VM {
     stack: Vec<Value>,
 }
 
-macro_rules! number_unary_op {
-    ($vm: expr, $chunk: expr, $op: tt, $msg: tt) => {
-        {
-            let top = &$vm.stack[$vm.stack.len() - 1];
-            match top.is_number() {
-                true => {
-                    let value = $vm.stack.pop().unwrap();
-                    $vm.stack.push($op value);
-                },
-                false => {
-                    let message = format!("{} op must be a number", $msg);
-                    $vm.runtime_error($chunk, &message);
-                    break InterpretResult::RuntimeError
-                },
+macro_rules! unary_op {
+    ($vm: expr, $chunk: expr, $op: expr) => {{
+        let top = $vm.stack.pop().unwrap();
+        match $op(top) {
+            Ok(v) => $vm.stack.push(v),
+            Err(msg) => {
+                $vm.runtime_error($chunk, msg);
+                break InterpretResult::RuntimeError;
             }
         }
-    };
+    }};
 }
 
-macro_rules! number_binary_op {
-    ($vm: expr, $chunk: expr, $op: tt, $msg: tt) => {
-        {
-            match ($vm.stack[$vm.stack.len() - 1], $vm.stack[$vm.stack.len() - 2]) {
-                (Value::Number(_), Value::Number(_)) => {
-                    let b: Value = $vm.stack.pop().unwrap();
-                    let a: Value = $vm.stack.pop().unwrap();
-                    $vm.stack.push(a $op b);
-                }
-                _ => {
-                    let message = format!("{} op must between tow numbers", $msg);
-                    $vm.runtime_error($chunk, &message);
-                    break InterpretResult::RuntimeError
-                }
+macro_rules! binary_op {
+    ($vm: expr, $chunk: expr, $op: expr) => {{
+        let b: Value = $vm.stack.pop().unwrap();
+        let a: Value = $vm.stack.pop().unwrap();
+        match $op(a, b) {
+            Ok(v) => $vm.stack.push(v),
+            Err(msg) => {
+                $vm.runtime_error($chunk, msg);
+                break InterpretResult::RuntimeError;
             }
         }
-    };
+    }};
 }
 
 impl VM {
@@ -92,6 +81,8 @@ impl VM {
             loop {
                 #[cfg(debug_assertions)]
                 {
+                    println!("");
+                    println!("|{:^12}|", "--stack--");
                     for value in self.stack.iter() {
                         println!("|{:^12.6}|", value.to_string());
                     }
@@ -112,11 +103,15 @@ impl VM {
                     OpCode::Nil => self.stack.push(Value::Nil),
                     OpCode::True => self.stack.push(Value::Bool(true)),
                     OpCode::False => self.stack.push(Value::Bool(false)),
-                    OpCode::Negate => number_unary_op!(self, chunk, -, "negate"),
-                    OpCode::Addition => number_binary_op!(self, chunk, +, "add"),
-                    OpCode::Subtract => number_binary_op!(self, chunk, -, "sub"),
-                    OpCode::Multiply => number_binary_op!(self, chunk, *, "mul"),
-                    OpCode::Divide => number_binary_op!(self, chunk, /, "div"),
+                    OpCode::Equal => binary_op!(self, chunk, |x: Value, y: Value| x.equal(&y)),
+                    OpCode::Greater => binary_op!(self, chunk, |x: Value, y: Value| x.greater(&y)),
+                    OpCode::Less => binary_op!(self, chunk, |x: Value, y: Value| x.less(&y)),
+                    OpCode::Not => unary_op!(self, chunk, |x: Value| !x),
+                    OpCode::Negate => unary_op!(self, chunk, |x: Value| -x),
+                    OpCode::Addition => binary_op!(self, chunk, |x: Value, y: Value| x + y),
+                    OpCode::Subtract => binary_op!(self, chunk, |x: Value, y: Value| x - y),
+                    OpCode::Multiply => binary_op!(self, chunk, |x: Value, y: Value| x * y),
+                    OpCode::Divide => binary_op!(self, chunk, |x: Value, y: Value| x / y),
                 }
             }
         };
@@ -137,7 +132,11 @@ impl VM {
     }
 
     fn runtime_error(&mut self, chunk: &Chunk, message: &str) {
-        eprintln!("{} : [line {}] in script", message, chunk.read_line(self.ip - 1));
+        eprintln!(
+            "{} : [line {}] in script",
+            message,
+            chunk.read_line(self.ip - 1)
+        );
         self.reset_stack()
     }
 }

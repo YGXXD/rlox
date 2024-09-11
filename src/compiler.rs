@@ -107,6 +107,41 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
         infix: None,
         precedence: Precedence::None,
     };
+    vec[TokenType::Bang as usize] = ParseRule {
+        prefix: Some(Compiler::parse_unary),
+        infix: None,
+        precedence: Precedence::None,
+    };
+    vec[TokenType::BangEqual as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Equality,
+    };
+    vec[TokenType::EqualEqual as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Equality,
+    };
+    vec[TokenType::Greater as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Comparison,
+    };
+    vec[TokenType::GreaterEqual as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Comparison,
+    };
+    vec[TokenType::Less as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Comparison,
+    };
+    vec[TokenType::LessEqual as usize] = ParseRule {
+        prefix: None,
+        infix: Some(Compiler::parse_binary),
+        precedence: Precedence::Comparison,
+    };
     vec
 };
 
@@ -125,7 +160,7 @@ impl Compiler {
             chunk: Chunk::new(),
             current: Token::default(),
             previous: Token::default(),
-            had_error: std::cell::RefCell::<bool>::new(false)
+            had_error: std::cell::RefCell::<bool>::new(false),
         }
     }
 
@@ -159,7 +194,6 @@ impl Compiler {
         } else {
             Ok(&self.chunk)
         }
-        
     }
 
     fn compile_error(&self, token: &Token, message: &str) {
@@ -223,6 +257,7 @@ impl Compiler {
             TokenType::Minus => self
                 .chunk
                 .write_code(OpCode::Negate.into(), unary_token.line),
+            TokenType::Bang => self.chunk.write_code(OpCode::Not.into(), unary_token.line),
             _ => self.compile_error(&unary_token, "Expect unary Error"),
         }
     }
@@ -248,21 +283,45 @@ impl Compiler {
             TokenType::Slash => self
                 .chunk
                 .write_code(OpCode::Divide.into(), binary_token.line),
+            TokenType::BangEqual => {
+                self.chunk
+                    .write_code(OpCode::Equal.into(), binary_token.line);
+                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+            }
+            TokenType::EqualEqual => self
+                .chunk
+                .write_code(OpCode::Equal.into(), binary_token.line),
+            TokenType::Greater => self
+                .chunk
+                .write_code(OpCode::Greater.into(), binary_token.line),
+            TokenType::GreaterEqual => {
+                self.chunk
+                    .write_code(OpCode::Less.into(), binary_token.line);
+                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+            }
+            TokenType::Less => self
+                .chunk
+                .write_code(OpCode::Less.into(), binary_token.line),
+            TokenType::LessEqual => {
+                self.chunk
+                    .write_code(OpCode::Greater.into(), binary_token.line);
+                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+            }
             _ => self.compile_error(&binary_token, "Expect binary Error"),
         }
     }
 
     fn parse_literal(&mut self) {
         match self.previous.r#type {
-            TokenType::Nil => self.
-                chunk.
-                write_code(OpCode::Nil.into(), self.previous.line),
-            TokenType::True => self.
-                chunk.
-                write_code(OpCode::True.into(), self.previous.line),
-            TokenType::False => self.
-                chunk.
-                write_code(OpCode::False.into(), self.previous.line),
+            TokenType::Nil => self
+                .chunk
+                .write_code(OpCode::Nil.into(), self.previous.line),
+            TokenType::True => self
+                .chunk
+                .write_code(OpCode::True.into(), self.previous.line),
+            TokenType::False => self
+                .chunk
+                .write_code(OpCode::False.into(), self.previous.line),
             _ => self.compile_error(&self.previous, "Expect literal Error"),
         }
     }
