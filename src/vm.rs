@@ -23,6 +23,15 @@ pub struct VM {
     stack: Vec<Value>,
 }
 
+macro_rules! read_constant {
+    ($vm: expr, $chunk: expr, $value_type: ident, $read_op: ident) => {{
+        let index: usize = $chunk.read_code($vm.ip) as usize;
+        let value: Value = Value::$value_type($chunk.$read_op(index));
+        $vm.ip += 1;
+        $vm.stack.push(value);
+    }};
+}
+
 macro_rules! unary_op {
     ($vm: expr, $chunk: expr, $op: expr) => {{
         let top = $vm.stack.pop().unwrap();
@@ -82,9 +91,9 @@ impl VM {
                 #[cfg(debug_assertions)]
                 {
                     println!("");
-                    println!("|{:^12}|", "--stack--");
+                    println!("|{:^16}|", "--stack--");
                     for value in self.stack.iter() {
-                        println!("|{:^12.6}|", value.to_string());
+                        println!("|{:^16}|", value.to_string());
                     }
                     chunk.disassemble_instruction(self.ip);
                 }
@@ -96,13 +105,11 @@ impl VM {
                         }
                         break InterpretResult::Success;
                     }
-                    OpCode::Constant => {
-                        let constant: Value = self.read_constant(chunk);
-                        self.stack.push(constant);
-                    }
                     OpCode::Nil => self.stack.push(Value::Nil),
                     OpCode::True => self.stack.push(Value::Bool(true)),
                     OpCode::False => self.stack.push(Value::Bool(false)),
+                    OpCode::Number => read_constant!(self, chunk, Number, read_number),
+                    OpCode::String => read_constant!(self, chunk, String, read_string),
                     OpCode::Equal => binary_op!(self, chunk, |x: Value, y: Value| x.equal(&y)),
                     OpCode::Greater => binary_op!(self, chunk, |x: Value, y: Value| x.greater(&y)),
                     OpCode::Less => binary_op!(self, chunk, |x: Value, y: Value| x.less(&y)),
@@ -122,13 +129,6 @@ impl VM {
         let byte: OpCode = chunk.read_code(self.ip).into();
         self.ip += 1;
         byte
-    }
-
-    fn read_constant(&mut self, chunk: &Chunk) -> Value {
-        let index: usize = chunk.read_code(self.ip) as usize;
-        let number: f64 = chunk.read_constant(index);
-        self.ip += 1;
-        Value::Number(number)
     }
 
     fn runtime_error(&mut self, chunk: &Chunk, message: &str) {

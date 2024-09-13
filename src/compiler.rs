@@ -142,6 +142,11 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
         infix: Some(Compiler::parse_binary),
         precedence: Precedence::Comparison,
     };
+    vec[TokenType::String as usize] = ParseRule {
+        prefix: Some(Compiler::parse_string),
+        infix: None,
+        precedence: Precedence::None,
+    };
     vec
 };
 
@@ -239,13 +244,33 @@ impl Compiler {
 
     fn parse_number(&mut self) {
         self.chunk
-            .write_code(OpCode::Constant.into(), self.previous.line);
+            .write_code(OpCode::Number.into(), self.previous.line);
         match self.previous.lexeme.parse::<f64>() {
-            Ok(number) => match self.chunk.add_constant(number) {
+            Ok(number) => match self.chunk.add_number(number) {
                 Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
                 Err(e) => self.compile_error(&self.previous, &e),
             },
             Err(_) => self.compile_error(&self.previous, "Expect number Error"),
+        };
+    }
+
+    fn parse_string(&mut self) {
+        self.chunk
+            .write_code(OpCode::String.into(), self.previous.line);
+        let string_len: usize = self.previous.lexeme.len();
+        match string_len >= 2 {
+            true => {
+                let string: String = if string_len > 2 {
+                    self.previous.lexeme[1..(string_len - 1)].to_string()
+                } else {
+                    "".to_string()
+                };
+                match self.chunk.add_string(string) {
+                    Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
+                    Err(e) => self.compile_error(&self.previous, &e),
+                }
+            }
+            false => self.compile_error(&self.previous, "Expect string Error"),
         };
     }
 

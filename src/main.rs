@@ -1,6 +1,5 @@
 mod chunk;
 mod compiler;
-// mod paser;
 mod scanner;
 mod token;
 mod value;

@@ -1,8 +1,9 @@
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Value {
     Bool(bool),
     Nil,
     Number(f64),
+    String(String),
 }
 
 impl ToString for Value {
@@ -11,6 +12,7 @@ impl ToString for Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_string(),
             Value::Number(n) => n.to_string(),
+            Value::String(s) => format!("\"{}\"", s),
         }
     }
 }
@@ -21,7 +23,7 @@ impl std::ops::Neg for Value {
     fn neg(self) -> Self::Output {
         match self {
             Value::Number(n) => Ok(Self::Number(-n)),
-            _ => Err("Neg operation must be number"),
+            _ => Err("Neg operation error"),
         }
     }
 }
@@ -32,7 +34,8 @@ impl std::ops::Add for Value {
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Number(x + y)),
-            _ => Err("Add operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::String(x + &y)), 
+            _ => Err("Add operation error"),
         }
     }
 }
@@ -43,7 +46,7 @@ impl std::ops::Sub for Value {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Number(x - y)),
-            _ => Err("Sub operation must between tow numbers"),
+            _ => Err("Sub operation error"),
         }
     }
 }
@@ -54,7 +57,7 @@ impl std::ops::Mul for Value {
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Number(x * y)),
-            _ => Err("Mul operation must between tow numbers"),
+            _ => Err("Mul operation error"),
         }
     }
 }
@@ -65,7 +68,7 @@ impl std::ops::Div for Value {
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Number(x / y)),
-            _ => Err("Div operation must between tow numbers"),
+            _ => Err("Div operation error"),
         }
     }
 }
@@ -78,6 +81,7 @@ impl std::ops::Not for Value {
             Value::Bool(b) => Ok(Self::Bool(!b)),
             Value::Nil => Ok(Self::Bool(true)),
             Value::Number(n) => Ok(Self::Bool(n == 0.0)),
+            Value::String(s) => Ok(Self::Bool(s.len() == 0)),
         }
     }
 }
@@ -95,12 +99,17 @@ impl Value {
         matches!(self, Self::Bool(_))
     }
 
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String(_))
+    }
+
     pub fn equal(&self, rhs: &Self) -> Result<Self, &'static str> {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x == y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x == y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 == 0)),
-            _ => Err("Equal operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x == y)),
+            _ => Err("Equal operation error"),
         }
     }
 
@@ -109,7 +118,8 @@ impl Value {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x != y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x != y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 != 0)),
-            _ => Err("Not Equal operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x != y)),
+            _ => Err("Not Equal operation error"),
         }
     }
 
@@ -118,7 +128,8 @@ impl Value {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x < y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x < y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 < 0)),
-            _ => Err("Less operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x < y)),
+            _ => Err("Less operation error"),
         }
     }
 
@@ -127,7 +138,8 @@ impl Value {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x <= y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x <= y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 <= 0)),
-            _ => Err("Less Equal operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x <= y)),
+            _ => Err("Less Equal operation error"),
         }
     }
 
@@ -136,7 +148,8 @@ impl Value {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x > y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x > y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 > 0)),
-            _ => Err("Greater operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x > y)),
+            _ => Err("Greater operation error"),
         }
     }
 
@@ -145,7 +158,8 @@ impl Value {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Bool(x >= y)),
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x >= y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 >= 0)),
-            _ => Err("Greater Equal operation must between tow numbers"),
+            (Value::String(x), Value::String(y)) => Ok(Self::Bool(x >= y)),
+            _ => Err("Greater Equal operation error"),
         }
     }
 }
