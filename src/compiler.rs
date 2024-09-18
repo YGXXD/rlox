@@ -147,6 +147,11 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
         infix: None,
         precedence: Precedence::None,
     };
+    vec[TokenType::Identifier as usize] = ParseRule {
+        prefix: Some(Compiler::parse_variable),
+        infix: None,
+        precedence: Precedence::None,
+    };
     vec
 };
 
@@ -155,6 +160,7 @@ pub struct Compiler {
     chunk: Chunk,
     current: Token,
     previous: Token,
+    is_panic: std::cell::RefCell<bool>,
     had_error: std::cell::RefCell<bool>,
 }
 
@@ -165,34 +171,38 @@ impl Compiler {
             chunk: Chunk::new(),
             current: Token::default(),
             previous: Token::default(),
+            is_panic: std::cell::RefCell::<bool>::new(false),
             had_error: std::cell::RefCell::<bool>::new(false),
+        }
+    }
+
+    pub fn show_tokens(&mut self, source: &String) {
+        self.scanner.reset(source);
+        loop {
+            let token = self.scanner.scan_token();
+            println!(
+                "{}    {}    {}",
+                token.line,
+                token.r#type.to_string(),
+                token.lexeme
+            );
+            match token.r#type {
+                TokenType::Eof | TokenType::Error => break,
+                _ => continue,
+            }
         }
     }
 
     pub fn compile(&mut self, source: &String) -> Result<&Chunk, String> {
         self.scanner.reset(source);
         self.advance();
-        self.parse_expression();
-        self.consume(TokenType::Eof, "Expect end of expression");
-        self.chunk
-            .write_code(OpCode::Return.into(), self.previous.line);
-
-        // loop {
-        //     let token = self.scanner.scan_token();
-        //     println!(
-        //         "{}    {}    {}",
-        //         token.line,
-        //         token.r#type.to_string(),
-        //         token.lexeme
-        //     );
-        //     match token.r#type {
-        //         TokenType::Eof | TokenType::Error => break,
-        //         _ => continue,
-        //     }
-        // }
-
-        // self.chunk.disassemble("chunk");
-        // println!("");
+        loop {
+            match self.r#match(TokenType::Eof) {
+                true => break,
+                false => self.declaration(),
+            }
+        }
+        self.compile_end();
 
         if *self.had_error.borrow() {
             Err("Compile error".to_string())
@@ -201,15 +211,10 @@ impl Compiler {
         }
     }
 
-    fn compile_error(&self, token: &Token, message: &str) {
-        eprint!("[line {}] Error ", token.line);
-        match token.r#type {
-            TokenType::Eof => eprint!("at end"),
-            TokenType::Error => eprint!("{}", token.lexeme),
-            _ => eprint!("at '{}", token.lexeme),
-        }
-        eprintln!(" : {}", message);
-        self.had_error.replace(true);
+    fn compile_end(&mut self) {
+        self.consume(TokenType::Eof, "Expect end of expression");
+        self.chunk
+            .write_code(OpCode::Return.into(), self.previous.line);
     }
 
     fn advance(&mut self) {
@@ -217,16 +222,117 @@ impl Compiler {
         loop {
             self.current = self.scanner.scan_token();
             match self.current.r#type {
-                TokenType::Error => self.compile_error(&self.current, "Scan Lex error"),
+                TokenType::Error => self.throw_error(&self.current, "Scan Lex error"),
                 _ => break,
             }
         }
     }
 
-    fn consume(&mut self, token_type: TokenType, message: &str) {
+    fn r#match(&mut self, token_type: TokenType) -> bool {
         match self.current.r#type == token_type {
-            true => self.advance(),
-            false => self.compile_error(&self.current, message),
+            true => {
+                self.advance();
+                true
+            }
+            false => false,
+        }
+    }
+
+    fn consume(&mut self, token_type: TokenType, message: &str) {
+        if !self.r#match(token_type) {
+            self.throw_error(&self.current, message)
+        }
+    }
+
+    fn throw_error(&self, token: &Token, message: &str) {
+        match unsafe { *self.is_panic.as_ptr() } {
+            true => return,
+            false => {
+                self.is_panic.replace(true);
+                eprint!("[line {}] Error ", token.line);
+                match token.r#type {
+                    TokenType::Eof => eprint!("at end"),
+                    TokenType::Error => eprint!("{}", token.lexeme),
+                    _ => eprint!("at '{}", token.lexeme),
+                }
+                eprintln!(" : {}", message);
+                self.had_error.replace(true);
+            }
+        }
+    }
+
+    fn error_synchronize(&mut self) {
+        match unsafe { *self.is_panic.as_ptr() } {
+            true => {
+                self.is_panic.replace(false);
+                loop {
+                    match self.current.r#type {
+                        TokenType::Eof => return,
+                        TokenType::Semicolon => {
+                            self.advance();
+                            return;
+                        }
+                        _ => self.advance(),
+                    }
+                }
+            }
+            false => return,
+        }
+    }
+
+    fn declaration(&mut self) {
+        self.statement();
+        self.error_synchronize();
+    }
+
+    fn statement(&mut self) {
+        match self.current.r#type {
+            TokenType::Var => {
+                self.advance();
+                self.variable_statement(); 
+            }
+            TokenType::Print => {
+                self.advance();
+                self.print_statement();
+            }
+            _ => self.expression_statement()
+        }
+    }
+
+    fn print_statement(&mut self) {
+        self.parse_expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after print value");
+        self.chunk
+            .write_code(OpCode::Print.into(), self.previous.line);
+    }
+
+    fn expression_statement(&mut self) {
+        self.parse_expression();
+        self.consume(TokenType::Semicolon, "Expect ';' after expression");
+        self.chunk
+            .write_code(OpCode::Pop.into(), self.previous.line);
+    }
+
+    fn variable_statement(&mut self) {
+        match self.r#match(TokenType::Identifier) {
+            true => {
+                let identifier_token: Token = self.previous.clone();
+                match self.chunk.add_identifier(identifier_token.lexeme) {
+                    Ok(idx) => {
+                        match self.r#match(TokenType::Equal) {
+                            true => self.parse_expression(),
+                            false => self
+                                .chunk
+                                .write_code(OpCode::Nil.into(), identifier_token.line),
+                        }
+                        self.consume(TokenType::Semicolon, "Expect ';' after variable statement");
+                        self.chunk.write_code(OpCode::DefineGlobal.into(), identifier_token.line);
+                        self.chunk.write_code(idx as u8, identifier_token.line);
+                    }
+                    Err(e) => self.throw_error(&self.previous, &e),
+                }
+            }
+            false => self.throw_error(&self.current, "Expect variable error"),
         }
     }
 
@@ -248,9 +354,9 @@ impl Compiler {
         match self.previous.lexeme.parse::<f64>() {
             Ok(number) => match self.chunk.add_number(number) {
                 Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
-                Err(e) => self.compile_error(&self.previous, &e),
+                Err(e) => self.throw_error(&self.previous, &e),
             },
-            Err(_) => self.compile_error(&self.previous, "Expect number Error"),
+            Err(_) => self.throw_error(&self.previous, "Expect number Error"),
         };
     }
 
@@ -267,11 +373,44 @@ impl Compiler {
                 };
                 match self.chunk.add_string(string) {
                     Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
-                    Err(e) => self.compile_error(&self.previous, &e),
+                    Err(e) => self.throw_error(&self.previous, &e),
                 }
             }
-            false => self.compile_error(&self.previous, "Expect string Error"),
+            false => self.throw_error(&self.previous, "Expect string Error"),
         };
+    }
+
+    fn parse_literal(&mut self) {
+        match self.previous.r#type {
+            TokenType::Nil => self
+                .chunk
+                .write_code(OpCode::Nil.into(), self.previous.line),
+            TokenType::True => self
+                .chunk
+                .write_code(OpCode::True.into(), self.previous.line),
+            TokenType::False => self
+                .chunk
+                .write_code(OpCode::False.into(), self.previous.line),
+            _ => self.throw_error(&self.previous, "Expect literal Error"),
+        }
+    }
+
+    fn parse_variable(&mut self) {
+        let variable_token = self.previous.clone();
+        match self.r#match(TokenType::Equal) {
+            true => {
+                self.parse_expression();
+                self.chunk
+                    .write_code(OpCode::SetGlobal.into(), variable_token.line);
+            }
+            false => self
+                .chunk
+                .write_code(OpCode::GetGlobal.into(), variable_token.line),
+        }
+        match self.chunk.add_identifier(variable_token.lexeme.clone()) {
+            Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
+            Err(e) => self.throw_error(&variable_token, &e),
+        }
     }
 
     fn parse_unary(&mut self) {
@@ -283,7 +422,7 @@ impl Compiler {
                 .chunk
                 .write_code(OpCode::Negate.into(), unary_token.line),
             TokenType::Bang => self.chunk.write_code(OpCode::Not.into(), unary_token.line),
-            _ => self.compile_error(&unary_token, "Expect unary Error"),
+            _ => self.throw_error(&unary_token, "Expect unary Error"),
         }
     }
 
@@ -332,22 +471,7 @@ impl Compiler {
                     .write_code(OpCode::Greater.into(), binary_token.line);
                 self.chunk.write_code(OpCode::Not.into(), binary_token.line);
             }
-            _ => self.compile_error(&binary_token, "Expect binary Error"),
-        }
-    }
-
-    fn parse_literal(&mut self) {
-        match self.previous.r#type {
-            TokenType::Nil => self
-                .chunk
-                .write_code(OpCode::Nil.into(), self.previous.line),
-            TokenType::True => self
-                .chunk
-                .write_code(OpCode::True.into(), self.previous.line),
-            TokenType::False => self
-                .chunk
-                .write_code(OpCode::False.into(), self.previous.line),
-            _ => self.compile_error(&self.previous, "Expect literal Error"),
+            _ => self.throw_error(&binary_token, "Expect binary Error"),
         }
     }
 
@@ -357,7 +481,7 @@ impl Compiler {
         // prefix
         match PARSE_RULES[Into::<usize>::into(self.previous.r#type.clone())].prefix {
             Some(parse_fn) => parse_fn(self),
-            None => self.compile_error(&self.previous, "Expect prefix error"),
+            None => self.throw_error(&self.previous, "Expect prefix error"),
         }
 
         // infix

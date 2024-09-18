@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::chunk::*;
 use crate::compiler::*;
 use crate::value::Value;
@@ -21,13 +23,13 @@ impl ToString for InterpretResult {
 pub struct VM {
     ip: usize,
     stack: Vec<Value>,
+    globals: HashMap<String, Value>,
 }
 
-macro_rules! read_constant {
+macro_rules! push_constant {
     ($vm: expr, $chunk: expr, $value_type: ident, $read_op: ident) => {{
-        let index: usize = $chunk.read_code($vm.ip) as usize;
-        let value: Value = Value::$value_type($chunk.$read_op(index));
-        $vm.ip += 1;
+        let index: usize = $vm.read_byte($chunk) as usize;
+        let value: Value = Value::$value_type($chunk.$read_op(index).clone());
         $vm.stack.push(value);
     }};
 }
@@ -64,6 +66,7 @@ impl VM {
         VM {
             ip: 0,
             stack: Vec::<Value>::new(),
+            globals: HashMap::<String, Value>::new(),
         }
     }
 
@@ -97,19 +100,17 @@ impl VM {
                     }
                     chunk.disassemble_instruction(self.ip);
                 }
-                let instruction: OpCode = self.read_byte(chunk);
+                let instruction: OpCode = self.read_byte(chunk).into();
                 match instruction {
                     OpCode::Return => {
-                        if let Some(value) = self.stack.pop() {
-                            println!("{}", value.to_string());
-                        }
+                        // exit interpret
                         break InterpretResult::Success;
                     }
                     OpCode::Nil => self.stack.push(Value::Nil),
                     OpCode::True => self.stack.push(Value::Bool(true)),
                     OpCode::False => self.stack.push(Value::Bool(false)),
-                    OpCode::Number => read_constant!(self, chunk, Number, read_number),
-                    OpCode::String => read_constant!(self, chunk, String, read_string),
+                    OpCode::Number => push_constant!(self, chunk, Number, read_number),
+                    OpCode::String => push_constant!(self, chunk, String, read_string),
                     OpCode::Equal => binary_op!(self, chunk, |x: Value, y: Value| x.equal(&y)),
                     OpCode::Greater => binary_op!(self, chunk, |x: Value, y: Value| x.greater(&y)),
                     OpCode::Less => binary_op!(self, chunk, |x: Value, y: Value| x.less(&y)),
@@ -119,14 +120,55 @@ impl VM {
                     OpCode::Subtract => binary_op!(self, chunk, |x: Value, y: Value| x - y),
                     OpCode::Multiply => binary_op!(self, chunk, |x: Value, y: Value| x * y),
                     OpCode::Divide => binary_op!(self, chunk, |x: Value, y: Value| x / y),
+                    OpCode::Print => println!("{}", self.stack.pop().unwrap().to_string()),
+                    OpCode::Pop => {
+                        let _ = self.stack.pop().unwrap();
+                    }
+                    OpCode::DefineGlobal => {
+                        let index: usize = self.read_byte(chunk) as usize;
+                        let identifier: &String = chunk.read_identifier(index);
+                        let value: Value = self.stack.pop().unwrap();
+                        self.globals.insert(identifier.clone(), value);
+                    }
+                    OpCode::GetGlobal => {
+                        let index: usize = self.read_byte(chunk) as usize;
+                        let identifier: &String = chunk.read_identifier(index);
+                        match self.globals.get(identifier) {
+                            Some(v) => self.stack.push(v.clone()),
+                            None => {
+                                self.runtime_error(
+                                    chunk,
+                                    &format!("Undefined variable '{}'", identifier),
+                                );
+                                break InterpretResult::RuntimeError;
+                            }
+                        };
+                    }
+                    OpCode::SetGlobal => {
+                        let index: usize = self.read_byte(chunk) as usize;
+                        let identifier: &String = chunk.read_identifier(index);
+                        match self.globals.get(identifier) {
+                            Some(_) => {
+                                let value: Value = self.stack.last().unwrap().clone();
+                                self.globals.insert(identifier.clone(), value);
+                            }
+                            None => {
+                                self.runtime_error(
+                                    chunk,
+                                    &format!("Undefined variable '{}'", identifier),
+                                );
+                                break InterpretResult::RuntimeError;
+                            }
+                        }
+                    }
                 }
             }
         };
         interpret_result
     }
 
-    fn read_byte(&mut self, chunk: &Chunk) -> OpCode {
-        let byte: OpCode = chunk.read_code(self.ip).into();
+    fn read_byte(&mut self, chunk: &Chunk) -> u8 {
+        let byte: u8 = chunk.read_code(self.ip);
         self.ip += 1;
         byte
     }

@@ -14,6 +14,11 @@ pub enum OpCode {
     Equal,
     Greater,
     Less,
+    Print,
+    Pop,
+    DefineGlobal,
+    GetGlobal,
+    SetGlobal,
 }
 
 impl From<OpCode> for u8 {
@@ -40,6 +45,11 @@ impl From<u8> for OpCode {
             12 => Self::Equal,
             13 => Self::Greater,
             14 => Self::Less,
+            15 => Self::Print,
+            16 => Self::Pop,
+            17 => Self::DefineGlobal,
+            18 => Self::GetGlobal,
+            19 => Self::SetGlobal,
             _ => unimplemented!("Invalid OpCode"),
         }
     }
@@ -63,6 +73,11 @@ impl ToString for OpCode {
             Self::Equal => "OP_EQUAL".to_string(),
             Self::Greater => "OP_GREATER".to_string(),
             Self::Less => "OP_LESS".to_string(),
+            Self::Print => "OP_PRINT".to_string(),
+            Self::Pop => "OP_POP".to_string(),
+            Self::DefineGlobal => "OP_DEFINE_GLOBAL".to_string(),
+            Self::GetGlobal => "OP_GET_GLOBAL".to_string(),
+            Self::SetGlobal => "OP_SET_GLOBAL".to_string(),
         }
     }
 }
@@ -71,6 +86,7 @@ pub struct Chunk {
     code: Vec<u8>,
     numbers: Vec<f64>,
     strings: Vec<String>,
+    identifiers: Vec<String>,
     lines: Vec<u32>,
 }
 
@@ -80,6 +96,7 @@ impl Chunk {
             code: Vec::<u8>::new(),
             numbers: Vec::<f64>::new(),
             strings: Vec::<String>::new(),
+            identifiers: Vec::<String>::new(),
             lines: Vec::<u32>::new(),
         }
     }
@@ -109,10 +126,21 @@ impl Chunk {
         }
     }
 
+    pub fn add_identifier(&mut self, identifier: String) -> Result<usize, String> {
+        match self.identifiers.len() < 0x100 {
+            true => {
+                self.identifiers.push(identifier);
+                Ok(self.identifiers.len() - 1)
+            }
+            false => Err("Too many identifiers in one chunk".to_string()),
+        }
+    }
+
     pub fn clear(&mut self) {
         self.code.clear();
         self.numbers.clear();
         self.strings.clear();
+        self.identifiers.clear();
         self.lines.clear();
     }
 
@@ -120,12 +148,16 @@ impl Chunk {
         self.code[offset]
     }
 
-    pub fn read_number(&self, offset: usize) -> f64 {
-        self.numbers[offset]
+    pub fn read_number(&self, offset: usize) -> &f64 {
+        &self.numbers[offset]
     }
 
-    pub fn read_string(&self, offset: usize) -> String {
-        self.strings[offset].clone()
+    pub fn read_string(&self, offset: usize) -> &String {
+        &self.strings[offset]
+    }
+
+    pub fn read_identifier(&self, offset: usize) -> &String {
+        &self.identifiers[offset]
     }
 
     pub fn read_line(&self, offset: usize) -> u32 {
@@ -137,8 +169,7 @@ pub trait Disassemble {
     fn disassemble(&self, disassemble_name: &str);
     fn disassemble_instruction(&self, offset: usize) -> usize;
     fn simple_instruction(&self, instruction: OpCode, offset: usize) -> usize;
-    fn number_instruction(&self, instruction: OpCode, offset: usize) -> usize;
-    fn string_instruction(&self, instruction: OpCode, offset: usize) -> usize;
+    fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize;
 }
 
 impl Disassemble for Chunk {
@@ -158,8 +189,8 @@ impl Disassemble for Chunk {
             OpCode::Nil => self.simple_instruction(instruction, offset),
             OpCode::True => self.simple_instruction(instruction, offset),
             OpCode::False => self.simple_instruction(instruction, offset),
-            OpCode::Number => self.number_instruction(instruction, offset),
-            OpCode::String => self.string_instruction(instruction, offset),
+            OpCode::Number => self.constant_instruction(instruction, offset),
+            OpCode::String => self.constant_instruction(instruction, offset),
             OpCode::Not => self.simple_instruction(instruction, offset),
             OpCode::Negate => self.simple_instruction(instruction, offset),
             OpCode::Addition => self.simple_instruction(instruction, offset),
@@ -169,6 +200,11 @@ impl Disassemble for Chunk {
             OpCode::Equal => self.simple_instruction(instruction, offset),
             OpCode::Greater => self.simple_instruction(instruction, offset),
             OpCode::Less => self.simple_instruction(instruction, offset),
+            OpCode::Print => self.simple_instruction(instruction, offset),
+            OpCode::Pop => self.simple_instruction(instruction, offset),
+            OpCode::DefineGlobal => self.constant_instruction(instruction, offset),
+            OpCode::GetGlobal => self.constant_instruction(instruction, offset),
+            OpCode::SetGlobal => self.constant_instruction(instruction, offset),
         }
     }
 
@@ -182,26 +218,21 @@ impl Disassemble for Chunk {
         offset + 1
     }
 
-    fn number_instruction(&self, instruction: OpCode, offset: usize) -> usize {
-        let number_offset: usize = self.code[offset + 1].into();
+    fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize {
+        let constant_offset: usize = self.code[offset + 1].into();
         println!(
             "line:{}  code:{}    {}    {}",
             self.lines[offset],
             offset,
             instruction.to_string(),
-            self.numbers[number_offset].to_string()
-        );
-        offset + 2
-    }
-
-    fn string_instruction(&self, instruction: OpCode, offset: usize) -> usize {
-        let string_offset: usize = self.code[offset + 1].into();
-        println!(
-            "line:{}  code:{}    {}    {}",
-            self.lines[offset],
-            offset,
-            instruction.to_string(),
-            format!("\"{}\"", self.strings[string_offset])
+            match instruction {
+                OpCode::Number => self.numbers[constant_offset].to_string(),
+                OpCode::String => format!("\"{}\"", self.strings[constant_offset]),
+                OpCode::DefineGlobal => format!("{}", self.identifiers[constant_offset]),
+                OpCode::GetGlobal => format!("{}", self.identifiers[constant_offset]),
+                OpCode::SetGlobal => format!("{}", self.identifiers[constant_offset]),
+                _ => "".to_string(),
+            }
         );
         offset + 2
     }

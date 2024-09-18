@@ -34,7 +34,7 @@ impl std::ops::Add for Value {
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Value::Number(x), Value::Number(y)) => Ok(Self::Number(x + y)),
-            (Value::String(x), Value::String(y)) => Ok(Self::String(x + &y)), 
+            (Value::String(x), Value::String(y)) => Ok(Self::String(x + &y)),
             _ => Err("Add operation error"),
         }
     }
