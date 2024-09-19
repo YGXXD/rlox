@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::chunk::*;
 use crate::scanner::*;
 use crate::token::*;
@@ -162,6 +164,11 @@ pub struct Compiler {
     previous: Token,
     is_panic: std::cell::RefCell<bool>,
     had_error: std::cell::RefCell<bool>,
+
+    // depth -> local_map(identifier -> index)
+    variables: HashMap<usize, HashMap<String, usize>>,
+    curr_local_count: usize,
+    curr_depth: usize,
 }
 
 impl Compiler {
@@ -173,6 +180,9 @@ impl Compiler {
             previous: Token::default(),
             is_panic: std::cell::RefCell::<bool>::new(false),
             had_error: std::cell::RefCell::<bool>::new(false),
+            variables: HashMap::<usize, HashMap<String, usize>>::new(),
+            curr_local_count: 0,
+            curr_depth: 0,
         }
     }
 
@@ -195,6 +205,11 @@ impl Compiler {
 
     pub fn compile(&mut self, source: &String) -> Result<&Chunk, String> {
         self.scanner.reset(source);
+        self.variables.clear();
+        self.curr_depth = 0;
+        self.variables
+            .insert(self.curr_depth, HashMap::<String, usize>::new());
+
         self.advance();
         loop {
             match self.r#match(TokenType::Eof) {
@@ -289,13 +304,17 @@ impl Compiler {
         match self.current.r#type {
             TokenType::Var => {
                 self.advance();
-                self.variable_statement(); 
+                self.variable_statement();
             }
             TokenType::Print => {
                 self.advance();
                 self.print_statement();
             }
-            _ => self.expression_statement()
+            TokenType::LeftBrace => {
+                self.advance();
+                self.block_statement();
+            }
+            _ => self.expression_statement(),
         }
     }
 
@@ -313,12 +332,43 @@ impl Compiler {
             .write_code(OpCode::Pop.into(), self.previous.line);
     }
 
+    // fn variable_statement(&mut self) {
+    //     match self.r#match(TokenType::Identifier) {
+    //         true => {
+    //             let identifier_token: Token = self.previous.clone();
+    //             match self.chunk.add_identifier(identifier_token.lexeme) {
+    //                 Ok(idx) => {
+    //                     match self.r#match(TokenType::Equal) {
+    //                         true => self.parse_expression(),
+    //                         false => self
+    //                             .chunk
+    //                             .write_code(OpCode::Nil.into(), identifier_token.line),
+    //                     }
+    //                     self.consume(TokenType::Semicolon, "Expect ';' after variable statement");
+    //                     self.chunk
+    //                         .write_code(OpCode::DefineGlobal.into(), identifier_token.line);
+    //                     self.chunk.write_code(idx as u8, identifier_token.line);
+    //                 }
+    //                 Err(e) => self.throw_error(&self.previous, &e),
+    //             }
+    //         }
+    //         false => self.throw_error(&self.current, "Expect variable error"),
+    //     }
+    // }
+
     fn variable_statement(&mut self) {
         match self.r#match(TokenType::Identifier) {
             true => {
                 let identifier_token: Token = self.previous.clone();
-                match self.chunk.add_identifier(identifier_token.lexeme) {
-                    Ok(idx) => {
+                let curr_depth = self.curr_depth;
+                match self
+                    .variables
+                    .get_mut(&curr_depth)
+                    .unwrap()
+                    .contains_key(&identifier_token.lexeme)
+                {
+                    true => self.throw_error(&identifier_token, "Redefined variable in curr space"),
+                    false => {
                         match self.r#match(TokenType::Equal) {
                             true => self.parse_expression(),
                             false => self
@@ -326,14 +376,60 @@ impl Compiler {
                                 .write_code(OpCode::Nil.into(), identifier_token.line),
                         }
                         self.consume(TokenType::Semicolon, "Expect ';' after variable statement");
-                        self.chunk.write_code(OpCode::DefineGlobal.into(), identifier_token.line);
-                        self.chunk.write_code(idx as u8, identifier_token.line);
+
+                        let curr_variable_map = self.variables.get_mut(&curr_depth).unwrap();
+                        match curr_depth {
+                            0 => {
+                                let global_slot = curr_variable_map.len();
+                                match self.chunk.add_variable(global_slot) {
+                                    Ok(idx) => {
+                                        curr_variable_map
+                                            .insert(identifier_token.lexeme, global_slot);
+                                        self.chunk.write_code(
+                                            OpCode::DefineGlobal.into(),
+                                            identifier_token.line,
+                                        );
+                                        self.chunk.write_code(idx as u8, identifier_token.line);
+                                    }
+                                    Err(e) => self.throw_error(&identifier_token, &e),
+                                }
+                            }
+                            _ => {
+                                curr_variable_map
+                                    .insert(identifier_token.lexeme, self.curr_local_count);
+                                self.curr_local_count += 1;
+                            }
+                        }
                     }
-                    Err(e) => self.throw_error(&self.previous, &e),
-                }
+                };
             }
             false => self.throw_error(&self.current, "Expect variable error"),
         }
+    }
+
+    fn block_statement(&mut self) {
+        self.curr_depth += 1;
+        self.variables
+            .insert(self.curr_depth, HashMap::<String, usize>::new());
+
+        loop {
+            match self.current.r#type != TokenType::RightBrace
+                && self.current.r#type != TokenType::Eof
+            {
+                true => self.declaration(),
+                false => break,
+            }
+        }
+        self.consume(TokenType::RightBrace, "Expect '}' after block");
+
+        let block_variables_len: usize = self.variables.get(&self.curr_depth).unwrap().len();
+        for _ in 0..block_variables_len {
+            self.chunk
+                .write_code(OpCode::Pop.into(), self.previous.line);
+        }
+        self.curr_local_count -= block_variables_len;
+        self.variables.remove(&self.curr_depth);
+        self.curr_depth -= 1;
     }
 
     fn parse_expression(&mut self) {
@@ -397,19 +493,56 @@ impl Compiler {
 
     fn parse_variable(&mut self) {
         let variable_token = self.previous.clone();
-        match self.r#match(TokenType::Equal) {
-            true => {
-                self.parse_expression();
-                self.chunk
-                    .write_code(OpCode::SetGlobal.into(), variable_token.line);
+        let mut curr_depth = self.curr_depth;
+        let variable_slot: Option<usize> = loop {
+            if curr_depth < 1 {
+                break Option::None;
             }
-            false => self
-                .chunk
-                .write_code(OpCode::GetGlobal.into(), variable_token.line),
-        }
-        match self.chunk.add_identifier(variable_token.lexeme.clone()) {
-            Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
-            Err(e) => self.throw_error(&variable_token, &e),
+            let variable_map = self.variables.get(&curr_depth).unwrap();
+            match variable_map.get(&variable_token.lexeme) {
+                Some(v) => break Option::Some(*v),
+                None => curr_depth -= 1,
+            }
+        };
+
+        if let Some(local_slot) = variable_slot {
+            match self.r#match(TokenType::Equal) {
+                true => {
+                    self.parse_expression();
+                    self.chunk
+                        .write_code(OpCode::SetLocal.into(), variable_token.line);
+                }
+                false => self
+                    .chunk
+                    .write_code(OpCode::GetLocal.into(), variable_token.line),
+            }
+            match self.chunk.add_variable(local_slot) {
+                Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
+                Err(e) => self.throw_error(&variable_token, &e),
+            }
+        } else if let Some(global_slot) = self
+            .variables
+            .get_mut(&0)
+            .unwrap()
+            .get(&variable_token.lexeme)
+            .cloned()
+        {
+            match self.r#match(TokenType::Equal) {
+                true => {
+                    self.parse_expression();
+                    self.chunk
+                        .write_code(OpCode::SetGlobal.into(), variable_token.line);
+                }
+                false => self
+                    .chunk
+                    .write_code(OpCode::GetGlobal.into(), variable_token.line),
+            }
+            match self.chunk.add_variable(global_slot.clone()) {
+                Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
+                Err(e) => self.throw_error(&variable_token, &e),
+            }
+        } else {
+            self.throw_error(&variable_token, "Undefined variable Error")
         }
     }
 

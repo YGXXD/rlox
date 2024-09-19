@@ -19,6 +19,8 @@ pub enum OpCode {
     DefineGlobal,
     GetGlobal,
     SetGlobal,
+    GetLocal,
+    SetLocal,
 }
 
 impl From<OpCode> for u8 {
@@ -50,6 +52,8 @@ impl From<u8> for OpCode {
             17 => Self::DefineGlobal,
             18 => Self::GetGlobal,
             19 => Self::SetGlobal,
+            20 => Self::GetLocal,
+            21 => Self::SetLocal,
             _ => unimplemented!("Invalid OpCode"),
         }
     }
@@ -78,6 +82,8 @@ impl ToString for OpCode {
             Self::DefineGlobal => "OP_DEFINE_GLOBAL".to_string(),
             Self::GetGlobal => "OP_GET_GLOBAL".to_string(),
             Self::SetGlobal => "OP_SET_GLOBAL".to_string(),
+            Self::GetLocal => "OP_GET_LOCAL".to_string(),
+            Self::SetLocal => "OP_SET_LOCAL".to_string(),
         }
     }
 }
@@ -86,7 +92,7 @@ pub struct Chunk {
     code: Vec<u8>,
     numbers: Vec<f64>,
     strings: Vec<String>,
-    identifiers: Vec<String>,
+    variables: Vec<usize>,
     lines: Vec<u32>,
 }
 
@@ -96,7 +102,7 @@ impl Chunk {
             code: Vec::<u8>::new(),
             numbers: Vec::<f64>::new(),
             strings: Vec::<String>::new(),
-            identifiers: Vec::<String>::new(),
+            variables: Vec::<usize>::new(),
             lines: Vec::<u32>::new(),
         }
     }
@@ -126,13 +132,13 @@ impl Chunk {
         }
     }
 
-    pub fn add_identifier(&mut self, identifier: String) -> Result<usize, String> {
-        match self.identifiers.len() < 0x100 {
+    pub fn add_variable(&mut self, variable: usize) -> Result<usize, String> {
+        match self.variables.len() < 0x100 {
             true => {
-                self.identifiers.push(identifier);
-                Ok(self.identifiers.len() - 1)
+                self.variables.push(variable);
+                Ok(self.variables.len() - 1)
             }
-            false => Err("Too many identifiers in one chunk".to_string()),
+            false => Err("Too many variable slots in one chunk".to_string()),
         }
     }
 
@@ -140,7 +146,7 @@ impl Chunk {
         self.code.clear();
         self.numbers.clear();
         self.strings.clear();
-        self.identifiers.clear();
+        self.variables.clear();
         self.lines.clear();
     }
 
@@ -156,8 +162,8 @@ impl Chunk {
         &self.strings[offset]
     }
 
-    pub fn read_identifier(&self, offset: usize) -> &String {
-        &self.identifiers[offset]
+    pub fn read_variable(&self, offset: usize) -> &usize {
+        &self.variables[offset]
     }
 
     pub fn read_line(&self, offset: usize) -> u32 {
@@ -205,6 +211,8 @@ impl Disassemble for Chunk {
             OpCode::DefineGlobal => self.constant_instruction(instruction, offset),
             OpCode::GetGlobal => self.constant_instruction(instruction, offset),
             OpCode::SetGlobal => self.constant_instruction(instruction, offset),
+            OpCode::GetLocal => self.constant_instruction(instruction, offset),
+            OpCode::SetLocal => self.constant_instruction(instruction, offset),
         }
     }
 
@@ -228,9 +236,11 @@ impl Disassemble for Chunk {
             match instruction {
                 OpCode::Number => self.numbers[constant_offset].to_string(),
                 OpCode::String => format!("\"{}\"", self.strings[constant_offset]),
-                OpCode::DefineGlobal => format!("{}", self.identifiers[constant_offset]),
-                OpCode::GetGlobal => format!("{}", self.identifiers[constant_offset]),
-                OpCode::SetGlobal => format!("{}", self.identifiers[constant_offset]),
+                OpCode::DefineGlobal => format!("{}", self.variables[constant_offset]),
+                OpCode::GetGlobal => format!("{}", self.variables[constant_offset]),
+                OpCode::SetGlobal => format!("{}", self.variables[constant_offset]),
+                OpCode::GetLocal => format!("{}", self.variables[constant_offset]),
+                OpCode::SetLocal => format!("{}", self.variables[constant_offset]),
                 _ => "".to_string(),
             }
         );

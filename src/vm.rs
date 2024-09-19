@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::chunk::*;
 use crate::compiler::*;
 use crate::value::Value;
@@ -23,7 +21,7 @@ impl ToString for InterpretResult {
 pub struct VM {
     ip: usize,
     stack: Vec<Value>,
-    globals: HashMap<String, Value>,
+    globals: Vec<Option<Value>>,
 }
 
 macro_rules! push_constant {
@@ -66,7 +64,7 @@ impl VM {
         VM {
             ip: 0,
             stack: Vec::<Value>::new(),
-            globals: HashMap::<String, Value>::new(),
+            globals: Vec::<Option<Value>>::new(),
         }
     }
 
@@ -81,6 +79,8 @@ impl VM {
     pub fn interpret_chunk(&mut self, chunk: &Chunk) -> InterpretResult {
         self.ip = 0;
         self.stack.clear();
+        self.globals.clear();
+        self.globals.resize(256, Option::None);
         self.run(chunk)
     }
 
@@ -91,15 +91,15 @@ impl VM {
     fn run(&mut self, chunk: &Chunk) -> InterpretResult {
         let interpret_result = {
             loop {
-                #[cfg(debug_assertions)]
-                {
-                    println!("");
-                    println!("|{:^16}|", "--stack--");
-                    for value in self.stack.iter() {
-                        println!("|{:^16}|", value.to_string());
-                    }
-                    chunk.disassemble_instruction(self.ip);
-                }
+                // #[cfg(debug_assertions)]
+                // {
+                //     println!("");
+                //     println!("|{:^16}|", "--stack--");
+                //     for value in self.stack.iter() {
+                //         println!("|{:^16}|", value.to_string());
+                //     }
+                //     chunk.disassemble_instruction(self.ip);
+                // }
                 let instruction: OpCode = self.read_byte(chunk).into();
                 match instruction {
                     OpCode::Return => {
@@ -126,36 +126,87 @@ impl VM {
                     }
                     OpCode::DefineGlobal => {
                         let index: usize = self.read_byte(chunk) as usize;
-                        let identifier: &String = chunk.read_identifier(index);
+                        let slot: &usize = chunk.read_variable(index);
                         let value: Value = self.stack.pop().unwrap();
-                        self.globals.insert(identifier.clone(), value);
+                        if *slot >= self.globals.len() {
+                            self.runtime_error(
+                                chunk,
+                                &format!(
+                                    "Global variable slot only in 0 ~ {}",
+                                    self.globals.len() - 1
+                                ),
+                            );
+                            break InterpretResult::RuntimeError;
+                        }
+                        match &self.globals[*slot] {
+                            Some(_) => {
+                                self.runtime_error(chunk, "Redefine global variable");
+                                break InterpretResult::RuntimeError;
+                            }
+                            None => self.globals[*slot] = Some(value),
+                        }
                     }
                     OpCode::GetGlobal => {
                         let index: usize = self.read_byte(chunk) as usize;
-                        let identifier: &String = chunk.read_identifier(index);
-                        match self.globals.get(identifier) {
-                            Some(v) => self.stack.push(v.clone()),
+                        let slot: &usize = chunk.read_variable(index);
+                        match &self.globals[*slot] {
+                            Some(v) => {
+                                self.stack.push(v.clone());
+                            }
                             None => {
                                 self.runtime_error(
                                     chunk,
-                                    &format!("Undefined variable '{}'", identifier),
+                                    &format!("Undefined variable in global slot[{}]", *slot),
                                 );
                                 break InterpretResult::RuntimeError;
                             }
-                        };
+                        }
                     }
                     OpCode::SetGlobal => {
                         let index: usize = self.read_byte(chunk) as usize;
-                        let identifier: &String = chunk.read_identifier(index);
-                        match self.globals.get(identifier) {
+                        let slot: &usize = chunk.read_variable(index);
+                        match &self.globals[*slot] {
                             Some(_) => {
-                                let value: Value = self.stack.last().unwrap().clone();
-                                self.globals.insert(identifier.clone(), value);
+                                let value: &Value = self.stack.last().unwrap();
+                                self.globals[*slot] = Some(value.clone());
                             }
                             None => {
                                 self.runtime_error(
                                     chunk,
-                                    &format!("Undefined variable '{}'", identifier),
+                                    &format!("Undefined variable in global slot[{}]", *slot),
+                                );
+                                break InterpretResult::RuntimeError;
+                            }
+                        }
+                    }
+                    OpCode::GetLocal => {
+                        let index: usize = self.read_byte(chunk) as usize;
+                        let slot: &usize = chunk.read_variable(index);
+                        match self.stack.get(*slot) {
+                            Some(v) => {
+                                self.stack.push(v.clone());
+                            }
+                            None => {
+                                self.runtime_error(
+                                    chunk,
+                                    &format!("Undefined variable in stack slot[{}]", *slot),
+                                );
+                                break InterpretResult::RuntimeError;
+                            }
+                        }
+                    }
+                    OpCode::SetLocal => {
+                        let index: usize = self.read_byte(chunk) as usize;
+                        let slot: &usize = chunk.read_variable(index);
+                        match self.stack.get(*slot) {
+                            Some(_) => {
+                                let value: &Value = self.stack.last().unwrap();
+                                self.stack[*slot] = value.clone();
+                            }
+                            None => {
+                                self.runtime_error(
+                                    chunk,
+                                    &format!("Undefined variable in stack slot[{}]", *slot),
                                 );
                                 break InterpretResult::RuntimeError;
                             }
