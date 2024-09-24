@@ -89,17 +89,24 @@ impl VM {
     }
 
     fn run(&mut self, chunk: &Chunk) -> InterpretResult {
+        #[cfg(debug_assertions)]
+        {
+            chunk.disassemble("debug chunk");
+        }
         let interpret_result = {
             loop {
-                // #[cfg(debug_assertions)]
-                // {
-                //     println!("");
-                //     println!("|{:^16}|", "--stack--");
-                //     for value in self.stack.iter() {
-                //         println!("|{:^16}|", value.to_string());
-                //     }
-                //     chunk.disassemble_instruction(self.ip);
-                // }
+                #[cfg(debug_assertions)]
+                {
+                    // println!("-----------------");
+                    // println!("{:^16}", "--stack--");
+                    // for value in self.stack.iter() {
+                    //     match value {
+                    //         Value::String(s) => println!("{:^16}", format!("\"{}\"", s)),
+                    //         _ => println!("{:^16}", value.to_string()),
+                    //     }
+                    // }
+                    // chunk.disassemble_instruction(self.ip);
+                }
                 let instruction: OpCode = self.read_byte(chunk).into();
                 match instruction {
                     OpCode::Return => {
@@ -212,6 +219,21 @@ impl VM {
                             }
                         }
                     }
+                    OpCode::JumpFalse => {
+                        let jump_offset: usize = self.read_short(chunk) as usize;
+                        let value: &Value = self.stack.last().unwrap();
+                        if !value.bool_value() {
+                            self.ip += jump_offset;
+                        }
+                    }
+                    OpCode::Jump => {
+                        let jump_offset: usize = self.read_short(chunk) as usize;
+                        self.ip += jump_offset;
+                    }
+                    OpCode::JumpBack => {
+                        let jump_offset: usize = self.read_short(chunk) as usize;
+                        self.ip -= jump_offset;
+                    }
                 }
             }
         };
@@ -222,6 +244,13 @@ impl VM {
         let byte: u8 = chunk.read_code(self.ip);
         self.ip += 1;
         byte
+    }
+
+    fn read_short(&mut self, chunk: &Chunk) -> u16 {
+        let low: u16 = chunk.read_code(self.ip).into();
+        let high: u16 = chunk.read_code(self.ip + 1).into();
+        self.ip += 2;
+        low | (high << 8)
     }
 
     fn runtime_error(&mut self, chunk: &Chunk, message: &str) {

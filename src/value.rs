@@ -12,7 +12,7 @@ impl ToString for Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_string(),
             Value::Number(n) => n.to_string(),
-            Value::String(s) => format!("\"{}\"", s),
+            Value::String(s) => s.to_string(),
         }
     }
 }
@@ -101,6 +101,15 @@ impl Value {
 
     pub fn is_string(&self) -> bool {
         matches!(self, Self::String(_))
+    }
+
+    pub fn bool_value(&self) -> bool {
+        match self {
+            Value::Bool(b) => *b,
+            Value::Nil => false,
+            Value::Number(n) => *n != 0.0,
+            Value::String(s) => s.len() != 0,
+        }
     }
 
     pub fn equal(&self, rhs: &Self) -> Result<Self, &'static str> {

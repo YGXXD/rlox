@@ -21,6 +21,9 @@ pub enum OpCode {
     SetGlobal,
     GetLocal,
     SetLocal,
+    JumpFalse,
+    Jump,
+    JumpBack,
 }
 
 impl From<OpCode> for u8 {
@@ -54,6 +57,9 @@ impl From<u8> for OpCode {
             19 => Self::SetGlobal,
             20 => Self::GetLocal,
             21 => Self::SetLocal,
+            22 => Self::JumpFalse,
+            23 => Self::Jump,
+            24 => Self::JumpBack,
             _ => unimplemented!("Invalid OpCode"),
         }
     }
@@ -84,6 +90,9 @@ impl ToString for OpCode {
             Self::SetGlobal => "OP_SET_GLOBAL".to_string(),
             Self::GetLocal => "OP_GET_LOCAL".to_string(),
             Self::SetLocal => "OP_SET_LOCAL".to_string(),
+            Self::JumpFalse => "OP_JUMP_FALSE".to_string(),
+            Self::Jump => "OP_JUMP".to_string(),
+            Self::JumpBack => "OP_JUMP_BACK".to_string(),
         }
     }
 }
@@ -110,6 +119,10 @@ impl Chunk {
     pub fn write_code(&mut self, byte: u8, line: u32) {
         self.code.push(byte);
         self.lines.push(line);
+    }
+
+    pub fn update_code(&mut self, offset: usize, byte: u8) {
+        self.code[offset] = byte;
     }
 
     pub fn add_number(&mut self, number: f64) -> Result<usize, String> {
@@ -150,6 +163,10 @@ impl Chunk {
         self.lines.clear();
     }
 
+    pub fn code_size(&self) -> usize {
+        self.code.len()
+    }
+
     pub fn read_code(&self, offset: usize) -> u8 {
         self.code[offset]
     }
@@ -176,16 +193,17 @@ pub trait Disassemble {
     fn disassemble_instruction(&self, offset: usize) -> usize;
     fn simple_instruction(&self, instruction: OpCode, offset: usize) -> usize;
     fn constant_instruction(&self, instruction: OpCode, offset: usize) -> usize;
+    fn jump_instruction(&self, instruction: OpCode, offset: usize) -> usize;
 }
 
 impl Disassemble for Chunk {
     fn disassemble(&self, disassemble_name: &str) {
         println!("== {} ==", disassemble_name);
-
         let mut offset: usize = 0;
         while offset < self.code.len() {
             offset = self.disassemble_instruction(offset);
         }
+        println!("== {} ==", disassemble_name);
     }
 
     fn disassemble_instruction(&self, offset: usize) -> usize {
@@ -213,6 +231,9 @@ impl Disassemble for Chunk {
             OpCode::SetGlobal => self.constant_instruction(instruction, offset),
             OpCode::GetLocal => self.constant_instruction(instruction, offset),
             OpCode::SetLocal => self.constant_instruction(instruction, offset),
+            OpCode::JumpFalse => self.jump_instruction(instruction, offset),
+            OpCode::Jump => self.jump_instruction(instruction, offset),
+            OpCode::JumpBack => self.jump_instruction(instruction, offset),
         }
     }
 
@@ -234,16 +255,32 @@ impl Disassemble for Chunk {
             offset,
             instruction.to_string(),
             match instruction {
-                OpCode::Number => self.numbers[constant_offset].to_string(),
-                OpCode::String => format!("\"{}\"", self.strings[constant_offset]),
-                OpCode::DefineGlobal => format!("{}", self.variables[constant_offset]),
-                OpCode::GetGlobal => format!("{}", self.variables[constant_offset]),
-                OpCode::SetGlobal => format!("{}", self.variables[constant_offset]),
-                OpCode::GetLocal => format!("{}", self.variables[constant_offset]),
-                OpCode::SetLocal => format!("{}", self.variables[constant_offset]),
+                OpCode::Number => format!("constant'{}", self.numbers[constant_offset].to_string()),
+                OpCode::String => format!("constant'\"{}\"", self.strings[constant_offset]),
+                OpCode::DefineGlobal => format!("global_slot'{}", self.variables[constant_offset]),
+                OpCode::GetGlobal => format!("global_slot'{}", self.variables[constant_offset]),
+                OpCode::SetGlobal => format!("global_slot'{}", self.variables[constant_offset]),
+                OpCode::GetLocal => format!("stack_slot'{}", self.variables[constant_offset]),
+                OpCode::SetLocal => format!("stack_slot'{}", self.variables[constant_offset]),
                 _ => "".to_string(),
             }
         );
         offset + 2
+    }
+
+    fn jump_instruction(&self, instruction: OpCode, offset: usize) -> usize {
+        let jump_count_low: u16 = self.code[offset + 1].into();
+        let jump_count_high: u16 = self.code[offset + 2].into();
+        println!(
+            "line:{}  code:{}    {}    jump_code'{}",
+            self.lines[offset],
+            offset,
+            instruction.to_string(),
+            match instruction {
+                OpCode::JumpBack => offset + 3 - (jump_count_low | (jump_count_high << 8)) as usize,
+                _ => (jump_count_low | (jump_count_high << 8)) as usize + offset + 3,
+            }
+        );
+        offset + 3
     }
 }
