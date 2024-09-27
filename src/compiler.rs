@@ -1,6 +1,9 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use crate::chunk::*;
+use crate::function::*;
 use crate::scanner::*;
 use crate::token::*;
 
@@ -167,32 +170,61 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
     vec
 };
 
+struct CompileContext {
+    // depth -> local_map(identifier -> index)
+    variables: HashMap<usize, HashMap<String, usize>>,
+    curr_local_count: usize,
+    curr_depth: usize,
+
+    // compile result
+    chunk: RefCell<Chunk>,
+    function_name: RefCell<String>, 
+}
+
+impl CompileContext {
+    fn new() -> Self {
+        Self {
+            variables: HashMap::new(),
+            curr_local_count: 0,
+            curr_depth: 0,
+            chunk: RefCell::new(Chunk::new()),
+            function_name: RefCell::new(String::default())
+        }
+    }
+}
+
 pub struct Compiler {
     scanner: Scanner,
-    chunk: Chunk,
     current: Token,
     previous: Token,
-    is_panic: std::cell::RefCell<bool>,
-    had_error: std::cell::RefCell<bool>,
+    is_panic: RefCell<bool>,
+    had_error: RefCell<bool>,
 
     // depth -> local_map(identifier -> index)
     variables: HashMap<usize, HashMap<String, usize>>,
     curr_local_count: usize,
     curr_depth: usize,
+
+    // compile result
+    chunk: RefCell<Chunk>,
+    function_name: RefCell<String>,
+
+    // compile stack
 }
 
 impl Compiler {
     pub fn new() -> Self {
         Self {
             scanner: Scanner::new(),
-            chunk: Chunk::new(),
             current: Token::default(),
             previous: Token::default(),
-            is_panic: std::cell::RefCell::<bool>::new(false),
-            had_error: std::cell::RefCell::<bool>::new(false),
+            is_panic: RefCell::<bool>::new(false),
+            had_error: RefCell::<bool>::new(false),
             variables: HashMap::<usize, HashMap<String, usize>>::new(),
             curr_local_count: 0,
             curr_depth: 0,
+            chunk: RefCell::new(Chunk::new()),
+            function_name: RefCell::new(String::default()),
         }
     }
 
@@ -213,7 +245,7 @@ impl Compiler {
         }
     }
 
-    pub fn compile(&mut self, source: &String) -> Result<&Chunk, String> {
+    pub fn compile(&mut self, source: &String) -> Result<Function, String> {
         self.scanner.reset(source);
         self.variables.clear();
         self.curr_depth = 0;
@@ -232,13 +264,24 @@ impl Compiler {
         if *self.had_error.borrow() {
             Err("Compile error".to_string())
         } else {
-            Ok(&self.chunk)
+            let chunk = self.chunk.replace(Chunk::new());
+            let function: Function = Function {
+                name: String::default(),
+                params_num: 0,
+                chunk: Rc::new(chunk),
+            };
+            #[cfg(debug_assertions)]
+            {
+                function.disassemble();
+            }
+            Ok(function)
         }
     }
 
     fn compile_end(&mut self) {
         self.consume(TokenType::Eof, "Expect end of expression");
         self.chunk
+            .get_mut()
             .write_code(OpCode::Return.into(), self.previous.line);
     }
 
@@ -334,8 +377,8 @@ impl Compiler {
             }
             TokenType::For => {
                 self.advance();
-                self.for_statement(); 
-            } 
+                self.for_statement();
+            }
             _ => self.expression_statement(),
         }
     }
@@ -344,6 +387,7 @@ impl Compiler {
         self.parse_expression();
         self.consume(TokenType::Semicolon, "Expect ';' after print value");
         self.chunk
+            .get_mut()
             .write_code(OpCode::Print.into(), self.previous.line);
     }
 
@@ -351,6 +395,7 @@ impl Compiler {
         self.parse_expression();
         self.consume(TokenType::Semicolon, "Expect ';' after expression");
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
     }
 
@@ -365,12 +410,13 @@ impl Compiler {
                     .unwrap()
                     .contains_key(&identifier_token.lexeme)
                 {
-                    true => self.throw_error(&identifier_token, "Redefined variable in curr space"),
+                    true => self.throw_error(&identifier_token, "Redefined identifier in curr space"),
                     false => {
                         match self.r#match(TokenType::Equal) {
                             true => self.parse_expression(),
                             false => self
                                 .chunk
+                                .get_mut()
                                 .write_code(OpCode::Nil.into(), identifier_token.line),
                         }
                         self.consume(TokenType::Semicolon, "Expect ';' after variable statement");
@@ -379,15 +425,17 @@ impl Compiler {
                         match curr_depth {
                             0 => {
                                 let global_slot = curr_variable_map.len();
-                                match self.chunk.add_variable(global_slot) {
+                                match self.chunk.get_mut().add_variable(global_slot) {
                                     Ok(idx) => {
                                         curr_variable_map
                                             .insert(identifier_token.lexeme, global_slot);
-                                        self.chunk.write_code(
+                                        self.chunk.get_mut().write_code(
                                             OpCode::DefineGlobal.into(),
                                             identifier_token.line,
                                         );
-                                        self.chunk.write_code(idx as u8, identifier_token.line);
+                                        self.chunk
+                                            .get_mut()
+                                            .write_code(idx as u8, identifier_token.line);
                                     }
                                     Err(e) => self.throw_error(&identifier_token, &e),
                                 }
@@ -428,12 +476,14 @@ impl Compiler {
 
         let jump_false_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop if expression
         self.statement();
 
         let jump_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
         self.patch_forward_end(jump_false_code_offset);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop if expression
         if self.r#match(TokenType::Else) {
             self.statement();
@@ -442,7 +492,7 @@ impl Compiler {
     }
 
     fn while_statement(&mut self) {
-        let start_code_offset: usize = self.chunk.code_size() - 1;
+        let start_code_offset: usize = self.chunk.get_mut().code_size() - 1;
 
         self.consume(TokenType::LeftParen, "Expect '(' after 'while'");
         self.parse_expression();
@@ -450,11 +500,13 @@ impl Compiler {
 
         let jump_false_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop while expression
         self.statement();
         self.patch_back(OpCode::JumpBack, start_code_offset);
         self.patch_forward_end(jump_false_code_offset);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop while expression
     }
 
@@ -474,7 +526,7 @@ impl Compiler {
             _ => self.expression_statement(),
         }
 
-        let mut start_code_offset: usize = self.chunk.code_size() - 1;
+        let mut start_code_offset: usize = self.chunk.get_mut().code_size() - 1;
 
         let mut jump_false_code_offset: Option<usize> = None;
         if !self.r#match(TokenType::Semicolon) {
@@ -483,31 +535,67 @@ impl Compiler {
 
             jump_false_code_offset = Some(self.patch_forward_begin(OpCode::JumpFalse));
             self.chunk
+                .get_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line); // pop for condition
         }
 
         if !self.r#match(TokenType::RightParen) {
             let jump_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
 
-            let increment_code_offset = self.chunk.code_size() - 1;
+            let increment_code_offset = self.chunk.get_mut().code_size() - 1;
             self.parse_expression();
+            self.chunk
+                .get_mut()
+                .write_code(OpCode::Pop.into(), self.previous.line); // pop for increment expression
             self.consume(TokenType::RightParen, "Expect ')' after for clauses");
             self.patch_back(OpCode::JumpBack, start_code_offset);
             start_code_offset = increment_code_offset;
-            
+
             self.patch_forward_end(jump_code_offset);
         }
 
         self.statement();
-        self.patch_back(OpCode::JumpBack, start_code_offset); 
+        self.patch_back(OpCode::JumpBack, start_code_offset);
 
         if let Some(code_offset) = jump_false_code_offset {
             self.patch_forward_end(code_offset);
             self.chunk
+                .get_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line); // pop for condition
         }
 
         self.scoop_end();
+    }
+
+    fn function_statement(&mut self) {
+        match self.r#match(TokenType::Identifier) {
+            true => {
+                let identifier_token: Token = self.previous.clone();
+                let curr_depth = self.curr_depth;
+                match self
+                    .variables
+                    .get_mut(&curr_depth)
+                    .unwrap()
+                    .contains_key(&identifier_token.lexeme)
+                {
+                    true => self.throw_error(&identifier_token, "Redefined identifier in curr space"),
+                    false => {
+                        self.scoop_begin();
+
+                        self.consume(TokenType::LeftParen, "Expect '(' after function name");
+                        self.consume(TokenType::RightParen, "Expect ')' after parameters");
+                        self.consume(TokenType::LeftBrace, "Expect '{' before function body");
+                        self.block_statement();
+
+                        self.compile_end();
+                        
+                        // emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
+                        todo!()
+                    },
+                }
+            }
+            false => self.throw_error(&self.current, "Expect function error"),
+        }
     }
 
     fn scoop_begin(&mut self) {
@@ -520,6 +608,7 @@ impl Compiler {
         let block_variables_len: usize = self.variables.get(&self.curr_depth).unwrap().len();
         for _ in 0..block_variables_len {
             self.chunk
+                .get_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line);
         }
         self.curr_local_count -= block_variables_len;
@@ -528,33 +617,41 @@ impl Compiler {
     }
 
     fn patch_forward_begin(&mut self, jump_code: OpCode) -> usize {
-        let jump_code_offset: usize = self.chunk.code_size();
-        self.chunk.write_code(jump_code.into(), self.previous.line);
-        self.chunk.write_code(0xff, self.previous.line);
-        self.chunk.write_code(0xff, self.previous.line);
+        let jump_code_offset: usize = self.chunk.get_mut().code_size();
+        self.chunk
+            .get_mut()
+            .write_code(jump_code.into(), self.previous.line);
+        self.chunk.get_mut().write_code(0xff, self.previous.line);
+        self.chunk.get_mut().write_code(0xff, self.previous.line);
         jump_code_offset
     }
 
     fn patch_forward_end(&mut self, jump_code_offset: usize) {
-        let jump_count: usize = self.chunk.code_size() - jump_code_offset - 3;
+        let jump_count: usize = self.chunk.get_mut().code_size() - jump_code_offset - 3;
         if jump_count > u16::MAX as usize {
             self.throw_error(&self.previous, "Too much code to jump over");
         }
         self.chunk
+            .get_mut()
             .update_code(jump_code_offset + 1, (jump_count & 0xff) as u8);
         self.chunk
+            .get_mut()
             .update_code(jump_code_offset + 2, ((jump_count >> 8) & 0xff) as u8);
     }
 
     fn patch_back(&mut self, jump_code: OpCode, start_code_offset: usize) {
-        let jump_count: usize = self.chunk.code_size() - start_code_offset + 2;
+        let jump_count: usize = self.chunk.get_mut().code_size() - start_code_offset + 2;
         if jump_count > u16::MAX as usize {
             self.throw_error(&self.previous, "Too much code to jump over");
         }
-        self.chunk.write_code(jump_code.into(), self.previous.line);
         self.chunk
+            .get_mut()
+            .write_code(jump_code.into(), self.previous.line);
+        self.chunk
+            .get_mut()
             .write_code((jump_count & 0xff) as u8, self.previous.line);
         self.chunk
+            .get_mut()
             .write_code(((jump_count >> 8) & 0xff) as u8, self.previous.line);
     }
 
@@ -572,10 +669,14 @@ impl Compiler {
 
     fn parse_number(&mut self) {
         self.chunk
+            .get_mut()
             .write_code(OpCode::Number.into(), self.previous.line);
         match self.previous.lexeme.parse::<f64>() {
-            Ok(number) => match self.chunk.add_number(number) {
-                Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
+            Ok(number) => match self.chunk.get_mut().add_number(number) {
+                Ok(idx) => self
+                    .chunk
+                    .get_mut()
+                    .write_code(idx as u8, self.previous.line),
                 Err(e) => self.throw_error(&self.previous, &e),
             },
             Err(_) => self.throw_error(&self.previous, "Expect number Error"),
@@ -584,6 +685,7 @@ impl Compiler {
 
     fn parse_string(&mut self) {
         self.chunk
+            .get_mut()
             .write_code(OpCode::String.into(), self.previous.line);
         let string_len: usize = self.previous.lexeme.len();
         match string_len >= 2 {
@@ -593,8 +695,11 @@ impl Compiler {
                 } else {
                     "".to_string()
                 };
-                match self.chunk.add_string(string) {
-                    Ok(idx) => self.chunk.write_code(idx as u8, self.previous.line),
+                match self.chunk.get_mut().add_string(string) {
+                    Ok(idx) => self
+                        .chunk
+                        .get_mut()
+                        .write_code(idx as u8, self.previous.line),
                     Err(e) => self.throw_error(&self.previous, &e),
                 }
             }
@@ -606,12 +711,15 @@ impl Compiler {
         match self.previous.r#type {
             TokenType::Nil => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Nil.into(), self.previous.line),
             TokenType::True => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::True.into(), self.previous.line),
             TokenType::False => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::False.into(), self.previous.line),
             _ => self.throw_error(&self.previous, "Expect literal Error"),
         }
@@ -636,14 +744,19 @@ impl Compiler {
                 true => {
                     self.parse_expression();
                     self.chunk
+                        .get_mut()
                         .write_code(OpCode::SetLocal.into(), variable_token.line);
                 }
                 false => self
                     .chunk
+                    .get_mut()
                     .write_code(OpCode::GetLocal.into(), variable_token.line),
             }
-            match self.chunk.add_variable(local_slot) {
-                Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
+            match self.chunk.get_mut().add_variable(local_slot) {
+                Ok(idx) => self
+                    .chunk
+                    .get_mut()
+                    .write_code(idx as u8, variable_token.line),
                 Err(e) => self.throw_error(&variable_token, &e),
             }
         } else if let Some(global_slot) = self
@@ -657,14 +770,19 @@ impl Compiler {
                 true => {
                     self.parse_expression();
                     self.chunk
+                        .get_mut()
                         .write_code(OpCode::SetGlobal.into(), variable_token.line);
                 }
                 false => self
                     .chunk
+                    .get_mut()
                     .write_code(OpCode::GetGlobal.into(), variable_token.line),
             }
-            match self.chunk.add_variable(global_slot.clone()) {
-                Ok(idx) => self.chunk.write_code(idx as u8, variable_token.line),
+            match self.chunk.get_mut().add_variable(global_slot.clone()) {
+                Ok(idx) => self
+                    .chunk
+                    .get_mut()
+                    .write_code(idx as u8, variable_token.line),
                 Err(e) => self.throw_error(&variable_token, &e),
             }
         } else {
@@ -679,8 +797,12 @@ impl Compiler {
         match unary_token.r#type {
             TokenType::Minus => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Negate.into(), unary_token.line),
-            TokenType::Bang => self.chunk.write_code(OpCode::Not.into(), unary_token.line),
+            TokenType::Bang => self
+                .chunk
+                .get_mut()
+                .write_code(OpCode::Not.into(), unary_token.line),
             _ => self.throw_error(&unary_token, "Expect unary Error"),
         }
     }
@@ -696,39 +818,55 @@ impl Compiler {
         match binary_token.r#type {
             TokenType::Plus => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Addition.into(), binary_token.line),
             TokenType::Minus => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Subtract.into(), binary_token.line),
             TokenType::Star => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Multiply.into(), binary_token.line),
             TokenType::Slash => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Divide.into(), binary_token.line),
             TokenType::BangEqual => {
                 self.chunk
+                    .get_mut()
                     .write_code(OpCode::Equal.into(), binary_token.line);
-                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+                self.chunk
+                    .get_mut()
+                    .write_code(OpCode::Not.into(), binary_token.line);
             }
             TokenType::EqualEqual => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Equal.into(), binary_token.line),
             TokenType::Greater => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Greater.into(), binary_token.line),
             TokenType::GreaterEqual => {
                 self.chunk
+                    .get_mut()
                     .write_code(OpCode::Less.into(), binary_token.line);
-                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+                self.chunk
+                    .get_mut()
+                    .write_code(OpCode::Not.into(), binary_token.line);
             }
             TokenType::Less => self
                 .chunk
+                .get_mut()
                 .write_code(OpCode::Less.into(), binary_token.line),
             TokenType::LessEqual => {
                 self.chunk
+                    .get_mut()
                     .write_code(OpCode::Greater.into(), binary_token.line);
-                self.chunk.write_code(OpCode::Not.into(), binary_token.line);
+                self.chunk
+                    .get_mut()
+                    .write_code(OpCode::Not.into(), binary_token.line);
             }
             _ => self.throw_error(&binary_token, "Expect binary Error"),
         }
@@ -737,6 +875,7 @@ impl Compiler {
     fn parse_and(&mut self) {
         let jump_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
         self.parse_precedence(Precedence::And);
         self.patch_forward_end(jump_code_offset);
@@ -747,6 +886,7 @@ impl Compiler {
         let jump_end_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
         self.patch_forward_end(jump_false_code_offset);
         self.chunk
+            .get_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
         self.parse_precedence(Precedence::Or);
         self.patch_forward_end(jump_end_code_offset);

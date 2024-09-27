@@ -183,8 +183,8 @@ impl Chunk {
         &self.variables[offset]
     }
 
-    pub fn read_line(&self, offset: usize) -> u32 {
-        self.lines[offset]
+    pub fn read_line(&self, offset: usize) -> &u32 {
+        &self.lines[offset]
     }
 }
 

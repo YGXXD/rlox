@@ -1,9 +1,13 @@
+use crate::function::Function;
+use std::rc::Rc;
+
 #[derive(Clone)]
 pub enum Value {
     Bool(bool),
     Nil,
     Number(f64),
     String(String),
+    Function(Rc<Function>),
 }
 
 impl ToString for Value {
@@ -13,6 +17,7 @@ impl ToString for Value {
             Value::Nil => "nil".to_string(),
             Value::Number(n) => n.to_string(),
             Value::String(s) => s.to_string(),
+            Value::Function(s) => s.to_string(),
         }
     }
 }
@@ -82,6 +87,7 @@ impl std::ops::Not for Value {
             Value::Nil => Ok(Self::Bool(true)),
             Value::Number(n) => Ok(Self::Bool(n == 0.0)),
             Value::String(s) => Ok(Self::Bool(s.len() == 0)),
+            Value::Function(_) => Ok(Self::Bool(false)),
         }
     }
 }
@@ -103,12 +109,17 @@ impl Value {
         matches!(self, Self::String(_))
     }
 
+    pub fn is_function(&self) -> bool {
+        matches!(self, Self::Function(_))
+    }
+
     pub fn bool_value(&self) -> bool {
         match self {
             Value::Bool(b) => *b,
             Value::Nil => false,
             Value::Number(n) => *n != 0.0,
             Value::String(s) => s.len() != 0,
+            Value::Function(_) => true,
         }
     }
 
@@ -118,6 +129,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x == y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 == 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x == y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) == Rc::as_ptr(y)))
+            }
             _ => Err("Equal operation error"),
         }
     }
@@ -128,6 +142,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x != y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 != 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x != y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) != Rc::as_ptr(y)))
+            }
             _ => Err("Not Equal operation error"),
         }
     }
@@ -138,6 +155,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x < y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 < 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x < y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) < Rc::as_ptr(y)))
+            }
             _ => Err("Less operation error"),
         }
     }
@@ -148,6 +168,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x <= y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 <= 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x <= y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) <= Rc::as_ptr(y)))
+            }
             _ => Err("Less Equal operation error"),
         }
     }
@@ -158,6 +181,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x > y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 > 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x > y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) > Rc::as_ptr(y)))
+            }
             _ => Err("Greater operation error"),
         }
     }
@@ -168,6 +194,9 @@ impl Value {
             (Value::Bool(x), Value::Bool(y)) => Ok(Self::Bool(x >= y)),
             (Value::Nil, Value::Nil) => Ok(Self::Bool(0 >= 0)),
             (Value::String(x), Value::String(y)) => Ok(Self::Bool(x >= y)),
+            (Value::Function(x), Value::Function(y)) => {
+                Ok(Self::Bool(Rc::as_ptr(x) >= Rc::as_ptr(y)))
+            }
             _ => Err("Greater Equal operation error"),
         }
     }
