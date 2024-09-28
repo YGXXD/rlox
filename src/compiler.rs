@@ -172,23 +172,23 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
 
 struct CompileContext {
     // depth -> local_map(identifier -> index)
-    variables: HashMap<usize, HashMap<String, usize>>,
-    curr_local_count: usize,
-    curr_depth: usize,
+    variables: RefCell<HashMap<usize, HashMap<String, usize>>>,
+    local_count: RefCell<usize>,
+    depth: RefCell<usize>,
 
     // compile result
     chunk: RefCell<Chunk>,
-    function_name: RefCell<String>, 
+    function_name: RefCell<String>,
 }
 
 impl CompileContext {
     fn new() -> Self {
         Self {
-            variables: HashMap::new(),
-            curr_local_count: 0,
-            curr_depth: 0,
+            variables: RefCell::new(HashMap::new()),
+            local_count: RefCell::new(0),
+            depth: RefCell::new(0),
             chunk: RefCell::new(Chunk::new()),
-            function_name: RefCell::new(String::default())
+            function_name: RefCell::new(String::default()),
         }
     }
 }
@@ -200,16 +200,8 @@ pub struct Compiler {
     is_panic: RefCell<bool>,
     had_error: RefCell<bool>,
 
-    // depth -> local_map(identifier -> index)
-    variables: HashMap<usize, HashMap<String, usize>>,
-    curr_local_count: usize,
-    curr_depth: usize,
-
-    // compile result
-    chunk: RefCell<Chunk>,
-    function_name: RefCell<String>,
-
     // compile stack
+    compile_context_stack: Vec<Rc<CompileContext>>,
 }
 
 impl Compiler {
@@ -220,12 +212,25 @@ impl Compiler {
             previous: Token::default(),
             is_panic: RefCell::<bool>::new(false),
             had_error: RefCell::<bool>::new(false),
-            variables: HashMap::<usize, HashMap<String, usize>>::new(),
-            curr_local_count: 0,
-            curr_depth: 0,
-            chunk: RefCell::new(Chunk::new()),
-            function_name: RefCell::new(String::default()),
+            compile_context_stack: Vec::<Rc<CompileContext>>::new(),
         }
+    }
+
+    fn root_context(&self) -> Rc<CompileContext> {
+        self.compile_context_stack.first().unwrap().clone()
+    }
+
+    fn push_context(&mut self) {
+        self.compile_context_stack
+            .push(Rc::new(CompileContext::new()));
+    }
+
+    fn curr_context(&self) -> Rc<CompileContext> {
+        self.compile_context_stack.last().unwrap().clone()
+    }
+
+    fn pop_context(&mut self) -> Rc<CompileContext> {
+        self.compile_context_stack.pop().unwrap()
     }
 
     pub fn show_tokens(&mut self, source: &String) {
@@ -247,10 +252,13 @@ impl Compiler {
 
     pub fn compile(&mut self, source: &String) -> Result<Function, String> {
         self.scanner.reset(source);
-        self.variables.clear();
-        self.curr_depth = 0;
-        self.variables
-            .insert(self.curr_depth, HashMap::<String, usize>::new());
+        // compile context push
+        self.push_context();
+        // global variables
+        self.root_context()
+            .variables
+            .borrow_mut()
+            .insert(0, HashMap::<String, usize>::new());
 
         self.advance();
         loop {
@@ -259,12 +267,11 @@ impl Compiler {
                 false => self.declaration(),
             }
         }
-        self.compile_end();
+        let chunk = self.compile_end();
 
         if *self.had_error.borrow() {
             Err("Compile error".to_string())
         } else {
-            let chunk = self.chunk.replace(Chunk::new());
             let function: Function = Function {
                 name: String::default(),
                 params_num: 0,
@@ -278,11 +285,13 @@ impl Compiler {
         }
     }
 
-    fn compile_end(&mut self) {
+    fn compile_end(&mut self) -> Chunk {
         self.consume(TokenType::Eof, "Expect end of expression");
-        self.chunk
-            .get_mut()
+        self.curr_context()
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Return.into(), self.previous.line);
+        self.pop_context().chunk.replace(Chunk::new())
     }
 
     fn advance(&mut self) {
@@ -386,55 +395,65 @@ impl Compiler {
     fn print_statement(&mut self) {
         self.parse_expression();
         self.consume(TokenType::Semicolon, "Expect ';' after print value");
-        self.chunk
-            .get_mut()
+        self.curr_context()
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Print.into(), self.previous.line);
     }
 
     fn expression_statement(&mut self) {
         self.parse_expression();
         self.consume(TokenType::Semicolon, "Expect ';' after expression");
-        self.chunk
-            .get_mut()
+        self.curr_context()
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
     }
 
     fn variable_statement(&mut self) {
         match self.r#match(TokenType::Identifier) {
             true => {
+                let context: Rc<CompileContext> = self.curr_context();
                 let identifier_token: Token = self.previous.clone();
-                let curr_depth = self.curr_depth;
-                match self
-                    .variables
-                    .get_mut(&curr_depth)
-                    .unwrap()
-                    .contains_key(&identifier_token.lexeme)
-                {
-                    true => self.throw_error(&identifier_token, "Redefined identifier in curr space"),
+                let curr_depth = *context.depth.borrow();
+
+                match {
+                    let curr_variables = context.variables.borrow();
+                    let curr_variable_map = curr_variables.get(&curr_depth).unwrap();
+                    curr_variable_map.contains_key(&identifier_token.lexeme)
+                } {
+                    true => {
+                        self.throw_error(&identifier_token, "Redefined identifier in curr space")
+                    }
                     false => {
                         match self.r#match(TokenType::Equal) {
                             true => self.parse_expression(),
-                            false => self
+                            false => context
                                 .chunk
-                                .get_mut()
+                                .borrow_mut()
                                 .write_code(OpCode::Nil.into(), identifier_token.line),
                         }
                         self.consume(TokenType::Semicolon, "Expect ';' after variable statement");
 
-                        let curr_variable_map = self.variables.get_mut(&curr_depth).unwrap();
+                        let mut curr_variables = context.variables.borrow_mut();
+                        let curr_variable_map = curr_variables.get_mut(&curr_depth).unwrap();
+
                         match curr_depth {
                             0 => {
                                 let global_slot = curr_variable_map.len();
-                                match self.chunk.get_mut().add_variable(global_slot) {
+                                let idx_option =
+                                    context.chunk.borrow_mut().add_variable(global_slot);
+                                match idx_option {
                                     Ok(idx) => {
                                         curr_variable_map
                                             .insert(identifier_token.lexeme, global_slot);
-                                        self.chunk.get_mut().write_code(
+                                        context.chunk.borrow_mut().write_code(
                                             OpCode::DefineGlobal.into(),
                                             identifier_token.line,
                                         );
-                                        self.chunk
-                                            .get_mut()
+                                        context
+                                            .chunk
+                                            .borrow_mut()
                                             .write_code(idx as u8, identifier_token.line);
                                     }
                                     Err(e) => self.throw_error(&identifier_token, &e),
@@ -442,8 +461,8 @@ impl Compiler {
                             }
                             _ => {
                                 curr_variable_map
-                                    .insert(identifier_token.lexeme, self.curr_local_count);
-                                self.curr_local_count += 1;
+                                    .insert(identifier_token.lexeme, *context.local_count.borrow());
+                                *context.local_count.borrow_mut() += 1;
                             }
                         }
                     }
@@ -470,20 +489,24 @@ impl Compiler {
     }
 
     fn if_statement(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
+
         self.consume(TokenType::LeftParen, "Expect '(' after 'if'");
         self.parse_expression();
         self.consume(TokenType::RightParen, "Expect ')' after condition");
 
         let jump_false_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop if expression
         self.statement();
 
         let jump_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
         self.patch_forward_end(jump_false_code_offset);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop if expression
         if self.r#match(TokenType::Else) {
             self.statement();
@@ -492,27 +515,32 @@ impl Compiler {
     }
 
     fn while_statement(&mut self) {
-        let start_code_offset: usize = self.chunk.get_mut().code_size() - 1;
+        let context: Rc<CompileContext> = self.curr_context();
+
+        let start_code_offset: usize = context.chunk.borrow().code_size() - 1;
 
         self.consume(TokenType::LeftParen, "Expect '(' after 'while'");
         self.parse_expression();
         self.consume(TokenType::RightParen, "Expect ')' after condition");
 
         let jump_false_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop while expression
         self.statement();
         self.patch_back(OpCode::JumpBack, start_code_offset);
         self.patch_forward_end(jump_false_code_offset);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line); // pop while expression
     }
 
     fn for_statement(&mut self) {
         self.scoop_begin();
 
+        let context: Rc<CompileContext> = self.curr_context();
         self.consume(TokenType::LeftParen, "Expect '(' after 'for'");
 
         match self.current.r#type {
@@ -526,7 +554,7 @@ impl Compiler {
             _ => self.expression_statement(),
         }
 
-        let mut start_code_offset: usize = self.chunk.get_mut().code_size() - 1;
+        let mut start_code_offset: usize = context.chunk.borrow().code_size() - 1;
 
         let mut jump_false_code_offset: Option<usize> = None;
         if !self.r#match(TokenType::Semicolon) {
@@ -534,18 +562,20 @@ impl Compiler {
             self.consume(TokenType::Semicolon, "Expect ';'");
 
             jump_false_code_offset = Some(self.patch_forward_begin(OpCode::JumpFalse));
-            self.chunk
-                .get_mut()
+            context
+                .chunk
+                .borrow_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line); // pop for condition
         }
 
         if !self.r#match(TokenType::RightParen) {
             let jump_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
 
-            let increment_code_offset = self.chunk.get_mut().code_size() - 1;
+            let increment_code_offset = context.chunk.borrow().code_size() - 1;
             self.parse_expression();
-            self.chunk
-                .get_mut()
+            context
+                .chunk
+                .borrow_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line); // pop for increment expression
             self.consume(TokenType::RightParen, "Expect ')' after for clauses");
             self.patch_back(OpCode::JumpBack, start_code_offset);
@@ -559,8 +589,9 @@ impl Compiler {
 
         if let Some(code_offset) = jump_false_code_offset {
             self.patch_forward_end(code_offset);
-            self.chunk
-                .get_mut()
+            context
+                .chunk
+                .borrow_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line); // pop for condition
         }
 
@@ -570,15 +601,18 @@ impl Compiler {
     fn function_statement(&mut self) {
         match self.r#match(TokenType::Identifier) {
             true => {
+                let context: Rc<CompileContext> = self.curr_context();
                 let identifier_token: Token = self.previous.clone();
-                let curr_depth = self.curr_depth;
-                match self
-                    .variables
-                    .get_mut(&curr_depth)
-                    .unwrap()
-                    .contains_key(&identifier_token.lexeme)
-                {
-                    true => self.throw_error(&identifier_token, "Redefined identifier in curr space"),
+                let curr_depth = *context.depth.borrow();
+
+                match {
+                    let curr_variables = context.variables.borrow();
+                    let curr_variable_map = curr_variables.get(&curr_depth).unwrap();
+                    curr_variable_map.contains_key(&identifier_token.lexeme)
+                } {
+                    true => {
+                        self.throw_error(&identifier_token, "Redefined identifier in curr space")
+                    }
                     false => {
                         self.scoop_begin();
 
@@ -588,10 +622,10 @@ impl Compiler {
                         self.block_statement();
 
                         self.compile_end();
-                        
+
                         // emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
                         todo!()
-                    },
+                    }
                 }
             }
             false => self.throw_error(&self.current, "Expect function error"),
@@ -599,59 +633,81 @@ impl Compiler {
     }
 
     fn scoop_begin(&mut self) {
-        self.curr_depth += 1;
-        self.variables
-            .insert(self.curr_depth, HashMap::<String, usize>::new());
+        let context: Rc<CompileContext> = self.curr_context();
+        *context.depth.borrow_mut() += 1;
+        let depth = *context.depth.borrow();
+        context
+            .variables
+            .borrow_mut()
+            .insert(depth, HashMap::<String, usize>::new());
     }
 
     fn scoop_end(&mut self) {
-        let block_variables_len: usize = self.variables.get(&self.curr_depth).unwrap().len();
+        let context: Rc<CompileContext> = self.curr_context();
+        let depth = *context.depth.borrow();
+        let block_variables_len: usize = context.variables.borrow().get(&depth).unwrap().len();
         for _ in 0..block_variables_len {
-            self.chunk
-                .get_mut()
+            context
+                .chunk
+                .borrow_mut()
                 .write_code(OpCode::Pop.into(), self.previous.line);
         }
-        self.curr_local_count -= block_variables_len;
-        self.variables.remove(&self.curr_depth);
-        self.curr_depth -= 1;
+        *context.local_count.borrow_mut() -= block_variables_len;
+        context.variables.borrow_mut().remove(&depth);
+        *context.depth.borrow_mut() -= 1;
     }
 
     fn patch_forward_begin(&mut self, jump_code: OpCode) -> usize {
-        let jump_code_offset: usize = self.chunk.get_mut().code_size();
-        self.chunk
-            .get_mut()
+        let context: Rc<CompileContext> = self.curr_context();
+        let jump_code_offset: usize = context.chunk.borrow().code_size();
+        context
+            .chunk
+            .borrow_mut()
             .write_code(jump_code.into(), self.previous.line);
-        self.chunk.get_mut().write_code(0xff, self.previous.line);
-        self.chunk.get_mut().write_code(0xff, self.previous.line);
+        context
+            .chunk
+            .borrow_mut()
+            .write_code(0xff, self.previous.line);
+        context
+            .chunk
+            .borrow_mut()
+            .write_code(0xff, self.previous.line);
         jump_code_offset
     }
 
     fn patch_forward_end(&mut self, jump_code_offset: usize) {
-        let jump_count: usize = self.chunk.get_mut().code_size() - jump_code_offset - 3;
+        let context: Rc<CompileContext> = self.curr_context();
+        let jump_count: usize = context.chunk.borrow().code_size() - jump_code_offset - 3;
         if jump_count > u16::MAX as usize {
             self.throw_error(&self.previous, "Too much code to jump over");
         }
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .update_code(jump_code_offset + 1, (jump_count & 0xff) as u8);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .update_code(jump_code_offset + 2, ((jump_count >> 8) & 0xff) as u8);
     }
 
     fn patch_back(&mut self, jump_code: OpCode, start_code_offset: usize) {
-        let jump_count: usize = self.chunk.get_mut().code_size() - start_code_offset + 2;
+        let context: Rc<CompileContext> = self.curr_context();
+        let jump_count: usize = context.chunk.borrow_mut().code_size() - start_code_offset + 2;
         if jump_count > u16::MAX as usize {
             self.throw_error(&self.previous, "Too much code to jump over");
         }
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(jump_code.into(), self.previous.line);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code((jump_count & 0xff) as u8, self.previous.line);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(((jump_count >> 8) & 0xff) as u8, self.previous.line);
     }
 
@@ -668,24 +724,31 @@ impl Compiler {
     }
 
     fn parse_number(&mut self) {
-        self.chunk
-            .get_mut()
+        let context: Rc<CompileContext> = self.curr_context();
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Number.into(), self.previous.line);
         match self.previous.lexeme.parse::<f64>() {
-            Ok(number) => match self.chunk.get_mut().add_number(number) {
-                Ok(idx) => self
-                    .chunk
-                    .get_mut()
-                    .write_code(idx as u8, self.previous.line),
-                Err(e) => self.throw_error(&self.previous, &e),
-            },
+            Ok(number) => {
+                let idx_option = context.chunk.borrow_mut().add_number(number);
+                match idx_option {
+                    Ok(idx) => context
+                        .chunk
+                        .borrow_mut()
+                        .write_code(idx as u8, self.previous.line),
+                    Err(e) => self.throw_error(&self.previous, &e),
+                }
+            }
             Err(_) => self.throw_error(&self.previous, "Expect number Error"),
         };
     }
 
     fn parse_string(&mut self) {
-        self.chunk
-            .get_mut()
+        let context: Rc<CompileContext> = self.curr_context();
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::String.into(), self.previous.line);
         let string_len: usize = self.previous.lexeme.len();
         match string_len >= 2 {
@@ -695,10 +758,11 @@ impl Compiler {
                 } else {
                     "".to_string()
                 };
-                match self.chunk.get_mut().add_string(string) {
-                    Ok(idx) => self
+                let idx_option = context.chunk.borrow_mut().add_string(string);
+                match idx_option {
+                    Ok(idx) => context
                         .chunk
-                        .get_mut()
+                        .borrow_mut()
                         .write_code(idx as u8, self.previous.line),
                     Err(e) => self.throw_error(&self.previous, &e),
                 }
@@ -708,80 +772,92 @@ impl Compiler {
     }
 
     fn parse_literal(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
         match self.previous.r#type {
-            TokenType::Nil => self
+            TokenType::Nil => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Nil.into(), self.previous.line),
-            TokenType::True => self
+            TokenType::True => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::True.into(), self.previous.line),
-            TokenType::False => self
+            TokenType::False => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::False.into(), self.previous.line),
             _ => self.throw_error(&self.previous, "Expect literal Error"),
         }
     }
 
     fn parse_variable(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
+        let root_context: Rc<CompileContext> = self.root_context();
         let variable_token = self.previous.clone();
-        let mut curr_depth = self.curr_depth;
-        let variable_slot: Option<usize> = loop {
-            if curr_depth < 1 {
-                break Option::None;
-            }
-            let variable_map = self.variables.get(&curr_depth).unwrap();
-            match variable_map.get(&variable_token.lexeme) {
-                Some(v) => break Option::Some(*v),
-                None => curr_depth -= 1,
-            }
-        };
 
-        if let Some(local_slot) = variable_slot {
+        if let Some(local_slot) = {
+            let mut curr_depth = *context.depth.borrow();
+            let curr_variables = context.variables.borrow();
+            let variable_slot: Option<usize> = loop {
+                if curr_depth < 1 {
+                    break Option::None;
+                }
+                let variable_map = curr_variables.get(&curr_depth).unwrap();
+                match variable_map.get(&variable_token.lexeme) {
+                    Some(v) => break Option::Some(*v),
+                    None => curr_depth -= 1,
+                }
+            };
+            variable_slot
+        } {
             match self.r#match(TokenType::Equal) {
                 true => {
                     self.parse_expression();
-                    self.chunk
-                        .get_mut()
+                    context
+                        .chunk
+                        .borrow_mut()
                         .write_code(OpCode::SetLocal.into(), variable_token.line);
                 }
-                false => self
+                false => context
                     .chunk
-                    .get_mut()
+                    .borrow_mut()
                     .write_code(OpCode::GetLocal.into(), variable_token.line),
             }
-            match self.chunk.get_mut().add_variable(local_slot) {
-                Ok(idx) => self
+            let idx_option = context.chunk.borrow_mut().add_variable(local_slot);
+            match idx_option {
+                Ok(idx) => context
                     .chunk
-                    .get_mut()
+                    .borrow_mut()
                     .write_code(idx as u8, variable_token.line),
                 Err(e) => self.throw_error(&variable_token, &e),
             }
-        } else if let Some(global_slot) = self
-            .variables
-            .get_mut(&0)
-            .unwrap()
-            .get(&variable_token.lexeme)
-            .cloned()
-        {
+        } else if let Some(global_slot) = {
+            let root_variables = root_context.variables.borrow();
+            let global_variable_slot = root_variables
+                .get(&0)
+                .unwrap()
+                .get(&variable_token.lexeme)
+                .cloned();
+            global_variable_slot
+        } {
             match self.r#match(TokenType::Equal) {
                 true => {
                     self.parse_expression();
-                    self.chunk
-                        .get_mut()
+                    context
+                        .chunk
+                        .borrow_mut()
                         .write_code(OpCode::SetGlobal.into(), variable_token.line);
                 }
-                false => self
+                false => context
                     .chunk
-                    .get_mut()
+                    .borrow_mut()
                     .write_code(OpCode::GetGlobal.into(), variable_token.line),
             }
-            match self.chunk.get_mut().add_variable(global_slot.clone()) {
-                Ok(idx) => self
+            let idx_option = context.chunk.borrow_mut().add_variable(global_slot);
+            match idx_option {
+                Ok(idx) => context
                     .chunk
-                    .get_mut()
+                    .borrow_mut()
                     .write_code(idx as u8, variable_token.line),
                 Err(e) => self.throw_error(&variable_token, &e),
             }
@@ -791,23 +867,25 @@ impl Compiler {
     }
 
     fn parse_unary(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
         let unary_token = self.previous.clone();
         self.parse_precedence(Precedence::Unary);
 
         match unary_token.r#type {
-            TokenType::Minus => self
+            TokenType::Minus => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Negate.into(), unary_token.line),
-            TokenType::Bang => self
+            TokenType::Bang => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Not.into(), unary_token.line),
             _ => self.throw_error(&unary_token, "Expect unary Error"),
         }
     }
 
     fn parse_binary(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
         let binary_token = self.previous.clone();
         self.parse_precedence(
             PARSE_RULES[Into::<usize>::into(binary_token.r#type.clone())]
@@ -816,56 +894,62 @@ impl Compiler {
         );
 
         match binary_token.r#type {
-            TokenType::Plus => self
+            TokenType::Plus => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Addition.into(), binary_token.line),
-            TokenType::Minus => self
+            TokenType::Minus => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Subtract.into(), binary_token.line),
-            TokenType::Star => self
+            TokenType::Star => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Multiply.into(), binary_token.line),
-            TokenType::Slash => self
+            TokenType::Slash => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Divide.into(), binary_token.line),
             TokenType::BangEqual => {
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Equal.into(), binary_token.line);
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Not.into(), binary_token.line);
             }
-            TokenType::EqualEqual => self
+            TokenType::EqualEqual => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Equal.into(), binary_token.line),
-            TokenType::Greater => self
+            TokenType::Greater => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Greater.into(), binary_token.line),
             TokenType::GreaterEqual => {
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Less.into(), binary_token.line);
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Not.into(), binary_token.line);
             }
-            TokenType::Less => self
+            TokenType::Less => context
                 .chunk
-                .get_mut()
+                .borrow_mut()
                 .write_code(OpCode::Less.into(), binary_token.line),
             TokenType::LessEqual => {
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Greater.into(), binary_token.line);
-                self.chunk
-                    .get_mut()
+                context
+                    .chunk
+                    .borrow_mut()
                     .write_code(OpCode::Not.into(), binary_token.line);
             }
             _ => self.throw_error(&binary_token, "Expect binary Error"),
@@ -873,20 +957,24 @@ impl Compiler {
     }
 
     fn parse_and(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
         let jump_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
         self.parse_precedence(Precedence::And);
         self.patch_forward_end(jump_code_offset);
     }
 
     fn parse_or(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
         let jump_false_code_offset: usize = self.patch_forward_begin(OpCode::JumpFalse);
         let jump_end_code_offset: usize = self.patch_forward_begin(OpCode::Jump);
         self.patch_forward_end(jump_false_code_offset);
-        self.chunk
-            .get_mut()
+        context
+            .chunk
+            .borrow_mut()
             .write_code(OpCode::Pop.into(), self.previous.line);
         self.parse_precedence(Precedence::Or);
         self.patch_forward_end(jump_end_code_offset);
