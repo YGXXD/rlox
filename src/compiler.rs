@@ -69,8 +69,8 @@ static PARSE_RULES: [ParseRule; TokenType::Error as usize] = {
 
     vec[TokenType::LeftParen as usize] = ParseRule {
         prefix: Some(Compiler::parse_grouping),
-        infix: None,
-        precedence: Precedence::None,
+        infix: Some(Compiler::parse_call),
+        precedence: Precedence::Call,
     };
     vec[TokenType::Plus as usize] = ParseRule {
         prefix: None,
@@ -179,6 +179,7 @@ struct CompileContext {
     // compile result
     chunk: RefCell<Chunk>,
     function_name: RefCell<String>,
+    params_num: RefCell<usize>,
 }
 
 impl CompileContext {
@@ -189,6 +190,7 @@ impl CompileContext {
             depth: RefCell::new(0),
             chunk: RefCell::new(Chunk::new()),
             function_name: RefCell::new(String::default()),
+            params_num: RefCell::new(0),
         }
     }
 }
@@ -267,31 +269,31 @@ impl Compiler {
                 false => self.declaration(),
             }
         }
-        let chunk = self.compile_end();
+        let function: Function = self.compile_end();
+        self.consume(TokenType::Eof, "Expect end of expression");
 
         if *self.had_error.borrow() {
             Err("Compile error".to_string())
         } else {
-            let function: Function = Function {
-                name: String::default(),
-                params_num: 0,
-                chunk: Rc::new(chunk),
-            };
-            #[cfg(debug_assertions)]
-            {
-                function.disassemble();
-            }
             Ok(function)
         }
     }
 
-    fn compile_end(&mut self) -> Chunk {
-        self.consume(TokenType::Eof, "Expect end of expression");
+    fn compile_end(&mut self) -> Function {
+        self.curr_context()
+            .chunk
+            .borrow_mut()
+            .write_code(OpCode::Nil.into(), self.previous.line);
         self.curr_context()
             .chunk
             .borrow_mut()
             .write_code(OpCode::Return.into(), self.previous.line);
-        self.pop_context().chunk.replace(Chunk::new())
+        let context = self.pop_context();
+        Function {
+            name: context.function_name.replace(String::new()),
+            params_num: context.params_num.replace(0),
+            chunk: Rc::new(context.chunk.replace(Chunk::new())),
+        }
     }
 
     fn advance(&mut self) {
@@ -387,6 +389,14 @@ impl Compiler {
             TokenType::For => {
                 self.advance();
                 self.for_statement();
+            }
+            TokenType::Fun => {
+                self.advance();
+                self.function_statement();
+            }
+            TokenType::Return => {
+                self.advance();
+                self.return_statement();
             }
             _ => self.expression_statement(),
         }
@@ -599,13 +609,17 @@ impl Compiler {
     }
 
     fn function_statement(&mut self) {
+        if self.curr_context().function_name.borrow().len() != 0 {
+            self.throw_error(&self.previous, "function define only in top-level code");
+        }
+
         match self.r#match(TokenType::Identifier) {
             true => {
-                let context: Rc<CompileContext> = self.curr_context();
                 let identifier_token: Token = self.previous.clone();
-                let curr_depth = *context.depth.borrow();
 
                 match {
+                    let context: Rc<CompileContext> = self.curr_context();
+                    let curr_depth = *context.depth.borrow();
                     let curr_variables = context.variables.borrow();
                     let curr_variable_map = curr_variables.get(&curr_depth).unwrap();
                     curr_variable_map.contains_key(&identifier_token.lexeme)
@@ -614,21 +628,142 @@ impl Compiler {
                         self.throw_error(&identifier_token, "Redefined identifier in curr space")
                     }
                     false => {
-                        self.scoop_begin();
+                        self.push_context();
+                        self.scoop_begin(); // no end scoop
+
+                        let context: Rc<CompileContext> = self.curr_context();
+                        context
+                            .function_name
+                            .replace(identifier_token.lexeme.clone());
 
                         self.consume(TokenType::LeftParen, "Expect '(' after function name");
+                        if self.current.r#type != TokenType::RightParen {
+                            let curr_depth = *context.depth.borrow();
+                            let mut curr_variables = context.variables.borrow_mut();
+                            let curr_variable_map = curr_variables.get_mut(&curr_depth).unwrap();
+
+                            loop {
+                                *context.params_num.borrow_mut() += 1;
+                                // define local variable
+                                match self.r#match(TokenType::Identifier) {
+                                    true => {
+                                        match curr_variable_map.contains_key(&self.previous.lexeme)
+                                        {
+                                            true => {
+                                                self.throw_error(
+                                                    &identifier_token,
+                                                    "Redefined param in curr function",
+                                                );
+                                                break;
+                                            }
+                                            false => {
+                                                curr_variable_map.insert(
+                                                    self.previous.lexeme.clone(),
+                                                    *context.local_count.borrow(),
+                                                );
+                                                *context.local_count.borrow_mut() += 1;
+                                            }
+                                        };
+                                    }
+                                    false => {
+                                        self.throw_error(
+                                            &self.current,
+                                            "Expect function param error",
+                                        );
+                                        break;
+                                    }
+                                }
+                                if !self.r#match(TokenType::Comma) {
+                                    break;
+                                }
+                            }
+                        }
+
                         self.consume(TokenType::RightParen, "Expect ')' after parameters");
+
                         self.consume(TokenType::LeftBrace, "Expect '{' before function body");
                         self.block_statement();
 
-                        self.compile_end();
+                        let function: Function = self.compile_end();
 
-                        // emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
-                        todo!()
+                        // OP function push value;
+                        let context: Rc<CompileContext> = self.curr_context();
+                        let curr_depth = *context.depth.borrow();
+                        context
+                            .chunk
+                            .borrow_mut()
+                            .write_code(OpCode::Function.into(), self.previous.line);
+                        let idx_option = context.chunk.borrow_mut().add_function(Rc::new(function));
+                        match idx_option {
+                            Ok(idx) => context
+                                .chunk
+                                .borrow_mut()
+                                .write_code(idx as u8, self.previous.line),
+                            Err(e) => self.throw_error(&identifier_token, &e),
+                        };
+
+                        // OP define function as variable
+                        let mut curr_variables = context.variables.borrow_mut();
+                        let curr_variable_map = curr_variables.get_mut(&curr_depth).unwrap();
+
+                        match curr_depth {
+                            0 => {
+                                let global_slot = curr_variable_map.len();
+                                let idx_option =
+                                    context.chunk.borrow_mut().add_variable(global_slot);
+                                match idx_option {
+                                    Ok(idx) => {
+                                        curr_variable_map
+                                            .insert(identifier_token.lexeme, global_slot);
+                                        context.chunk.borrow_mut().write_code(
+                                            OpCode::DefineGlobal.into(),
+                                            identifier_token.line,
+                                        );
+                                        context
+                                            .chunk
+                                            .borrow_mut()
+                                            .write_code(idx as u8, identifier_token.line);
+                                    }
+                                    Err(e) => self.throw_error(&identifier_token, &e),
+                                }
+                            }
+                            _ => {
+                                curr_variable_map
+                                    .insert(identifier_token.lexeme, *context.local_count.borrow());
+                                *context.local_count.borrow_mut() += 1;
+                            }
+                        }
                     }
                 }
             }
             false => self.throw_error(&self.current, "Expect function error"),
+        }
+    }
+
+    fn return_statement(&mut self) {
+        if self.curr_context().function_name.borrow().len() == 0 {
+            self.throw_error(&self.previous, "Can't return from top-level code");
+        }
+
+        match self.r#match(TokenType::Semicolon) {
+            true => {
+                self.curr_context()
+                    .chunk
+                    .borrow_mut()
+                    .write_code(OpCode::Nil.into(), self.previous.line);
+                self.curr_context()
+                    .chunk
+                    .borrow_mut()
+                    .write_code(OpCode::Return.into(), self.previous.line);
+            }
+            false => {
+                self.parse_expression();
+                self.consume(TokenType::Semicolon, "Expect ';' after return value.");
+                self.curr_context()
+                    .chunk
+                    .borrow_mut()
+                    .write_code(OpCode::Return.into(), self.previous.line);
+            }
         }
     }
 
@@ -978,6 +1113,33 @@ impl Compiler {
             .write_code(OpCode::Pop.into(), self.previous.line);
         self.parse_precedence(Precedence::Or);
         self.patch_forward_end(jump_end_code_offset);
+    }
+
+    fn parse_call(&mut self) {
+        let context: Rc<CompileContext> = self.curr_context();
+        let mut arg_cout: u8 = 0;
+        if self.current.r#type != TokenType::RightParen {
+            loop {
+                self.parse_expression();
+                if arg_cout == 0xff {
+                    self.throw_error(&self.previous, "Can't have more than 255 params");
+                }
+                arg_cout += 1;
+
+                if !self.r#match(TokenType::Comma) {
+                    break;
+                }
+            }
+        }
+        self.consume(TokenType::RightParen, "Expect ')' after arguments.");
+        context
+            .chunk
+            .borrow_mut()
+            .write_code(OpCode::Call.into(), self.previous.line);
+        context
+            .chunk
+            .borrow_mut()
+            .write_code(arg_cout, self.previous.line);
     }
 
     fn parse_precedence(&mut self, precedence: Precedence) {

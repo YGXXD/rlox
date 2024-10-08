@@ -82,10 +82,17 @@ impl VM {
         let mut compiler: Compiler = Compiler::new();
         match compiler.compile(source) {
             Ok(function) => {
+                self.stack.clear();
+                self.globals.clear();
+                self.globals.resize(256, Option::None);
+
+                let rc_fun = Rc::new(function);
+                let fun_value = Value::Function(rc_fun.clone());
+                self.stack.push(fun_value);
                 self.frames.push(CallFrame {
+                    function: rc_fun,
                     ip: RefCell::new(0),
-                    function: Rc::new(function),
-                    slot: 0,
+                    slot: self.stack.len(),
                 });
                 self.run()
             }
@@ -105,9 +112,6 @@ impl VM {
     }
 
     fn run(&mut self) -> InterpretResult {
-        self.stack.clear();
-        self.globals.clear();
-        self.globals.resize(256, Option::None);
         let interpret_result = {
             loop {
                 #[cfg(debug_assertions)]
@@ -120,19 +124,25 @@ impl VM {
                     //         _ => println!("{:^16}", value.to_string()),
                     //     }
                     // }
-                    // self.curr_chunk().disassemble_instruction(self.ip);
+                    // self.curr_chunk().disassemble_instruction(self.curr_ip());
                 }
                 let instruction: OpCode = self.read_byte().into();
                 match instruction {
                     OpCode::Return => {
-                        // exit interpret
-                        break InterpretResult::Success;
+                        let result = self.stack.pop().unwrap();
+                        let frame = self.frames.pop().unwrap();
+                        if self.frames.len() == 0 {
+                            break InterpretResult::Success;
+                        }
+                        self.stack.truncate(frame.slot - 1);
+                        self.stack.push(result);
                     }
                     OpCode::Nil => self.stack.push(Value::Nil),
                     OpCode::True => self.stack.push(Value::Bool(true)),
                     OpCode::False => self.stack.push(Value::Bool(false)),
                     OpCode::Number => push_constant!(self, Number, read_number),
                     OpCode::String => push_constant!(self, String, read_string),
+                    OpCode::Function => push_constant!(self, Function, read_function),
                     OpCode::Equal => binary_op!(self, |x: Value, y: Value| x.equal(&y)),
                     OpCode::Greater => binary_op!(self, |x: Value, y: Value| x.greater(&y)),
                     OpCode::Less => binary_op!(self, |x: Value, y: Value| x.less(&y)),
@@ -167,15 +177,15 @@ impl VM {
                     }
                     OpCode::GetGlobal => {
                         let index: usize = self.read_byte() as usize;
-                        let slot: usize = self.curr_chunk().read_variable(index).clone();
-                        match &self.globals[slot] {
+                        let global_slot: usize = self.curr_chunk().read_variable(index).clone();
+                        match &self.globals[global_slot] {
                             Some(v) => {
                                 self.stack.push(v.clone());
                             }
                             None => {
                                 self.runtime_error(&format!(
                                     "Undefined variable in global slot[{}]",
-                                    slot
+                                    global_slot
                                 ));
                                 break InterpretResult::RuntimeError;
                             }
@@ -183,16 +193,16 @@ impl VM {
                     }
                     OpCode::SetGlobal => {
                         let index: usize = self.read_byte() as usize;
-                        let slot: usize = self.curr_chunk().read_variable(index).clone();
-                        match &self.globals[slot] {
+                        let global_slot: usize = self.curr_chunk().read_variable(index).clone();
+                        match &self.globals[global_slot] {
                             Some(_) => {
                                 let value: &Value = self.stack.last().unwrap();
-                                self.globals[slot] = Some(value.clone());
+                                self.globals[global_slot] = Some(value.clone());
                             }
                             None => {
                                 self.runtime_error(&format!(
                                     "Undefined variable in global slot[{}]",
-                                    slot
+                                    global_slot
                                 ));
                                 break InterpretResult::RuntimeError;
                             }
@@ -200,15 +210,16 @@ impl VM {
                     }
                     OpCode::GetLocal => {
                         let index: usize = self.read_byte() as usize;
-                        let slot: usize = self.curr_chunk().read_variable(index).clone();
-                        match self.stack.get(slot) {
+                        let local_slot: usize = self.curr_chunk().read_variable(index).clone();
+                        let stack_slot = local_slot + self.curr_frame().slot;
+                        match self.stack.get(stack_slot) {
                             Some(v) => {
                                 self.stack.push(v.clone());
                             }
                             None => {
                                 self.runtime_error(&format!(
                                     "Undefined variable in stack slot[{}]",
-                                    slot
+                                    stack_slot
                                 ));
                                 break InterpretResult::RuntimeError;
                             }
@@ -216,16 +227,17 @@ impl VM {
                     }
                     OpCode::SetLocal => {
                         let index: usize = self.read_byte() as usize;
-                        let slot: usize = self.curr_chunk().read_variable(index).clone();
-                        match self.stack.get(slot) {
+                        let local_slot: usize = self.curr_chunk().read_variable(index).clone();
+                        let stack_slot = local_slot + self.curr_frame().slot;
+                        match self.stack.get(stack_slot) {
                             Some(_) => {
                                 let value: &Value = self.stack.last().unwrap();
-                                self.stack[slot] = value.clone();
+                                self.stack[stack_slot] = value.clone();
                             }
                             None => {
                                 self.runtime_error(&format!(
                                     "Undefined variable in stack slot[{}]",
-                                    slot
+                                    stack_slot
                                 ));
                                 break InterpretResult::RuntimeError;
                             }
@@ -245,6 +257,21 @@ impl VM {
                     OpCode::JumpBack => {
                         let jump_offset: usize = self.read_short() as usize;
                         self.curr_ip_dec(jump_offset);
+                    }
+                    OpCode::Call => {
+                        let arg_cout: usize = self.read_byte() as usize;
+                        let function_value =
+                            self.stack.get(self.stack.len() - 1 - arg_cout).unwrap();
+                        match function_value {
+                            Value::Function(fun) => {
+                                self.frames.push(CallFrame {
+                                    function: fun.clone(),
+                                    ip: RefCell::new(0),
+                                    slot: self.stack.len() - arg_cout,
+                                });
+                            }
+                            _ => break InterpretResult::RuntimeError,
+                        }
                     }
                 }
             }
