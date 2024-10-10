@@ -1,7 +1,7 @@
 var a = 23;
 var b = 12;
 
-fun test(a) {
+fun test1(a) {
     var b = 10;
     if (b + a < 10) {
         print "b + a < 10";
@@ -11,5 +11,12 @@ fun test(a) {
     return "yes";
 }
 
-print test(1);
-print test(-1);
+fun test2(a, i) {
+    if (i > 0)
+        return test2(a * 2, i - 1);
+    else
+        return a; 
+}
+
+print test1(1);
+print test2(3, 3);

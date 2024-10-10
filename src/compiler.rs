@@ -289,11 +289,13 @@ impl Compiler {
             .borrow_mut()
             .write_code(OpCode::Return.into(), self.previous.line);
         let context = self.pop_context();
-        Function {
+        let function = Function {
             name: context.function_name.replace(String::new()),
             params_num: context.params_num.replace(0),
             chunk: Rc::new(context.chunk.replace(Chunk::new())),
-        }
+        };
+        // function.disassemble();
+        function
     }
 
     fn advance(&mut self) {
@@ -628,93 +630,122 @@ impl Compiler {
                         self.throw_error(&identifier_token, "Redefined identifier in curr space")
                     }
                     false => {
-                        self.push_context();
-                        self.scoop_begin(); // no end scoop
-
-                        let context: Rc<CompileContext> = self.curr_context();
-                        context
-                            .function_name
-                            .replace(identifier_token.lexeme.clone());
-
-                        self.consume(TokenType::LeftParen, "Expect '(' after function name");
-                        if self.current.r#type != TokenType::RightParen {
+                        {
+                            let context: Rc<CompileContext> = self.curr_context();
                             let curr_depth = *context.depth.borrow();
                             let mut curr_variables = context.variables.borrow_mut();
                             let curr_variable_map = curr_variables.get_mut(&curr_depth).unwrap();
 
-                            loop {
-                                *context.params_num.borrow_mut() += 1;
-                                // define local variable
-                                match self.r#match(TokenType::Identifier) {
-                                    true => {
-                                        match curr_variable_map.contains_key(&self.previous.lexeme)
-                                        {
-                                            true => {
-                                                self.throw_error(
-                                                    &identifier_token,
-                                                    "Redefined param in curr function",
-                                                );
-                                                break;
-                                            }
-                                            false => {
-                                                curr_variable_map.insert(
-                                                    self.previous.lexeme.clone(),
-                                                    *context.local_count.borrow(),
-                                                );
-                                                *context.local_count.borrow_mut() += 1;
-                                            }
-                                        };
+                            match curr_depth {
+                                0 => {
+                                    let global_slot = curr_variable_map.len();
+                                    curr_variable_map.insert(identifier_token.lexeme.clone(), global_slot);
+                                }
+                                _ => {
+                                    curr_variable_map.insert(
+                                        identifier_token.lexeme.clone(),
+                                        *context.local_count.borrow(),
+                                    );
+                                    *context.local_count.borrow_mut() += 1;
+                                }
+                            }
+                        };
+
+                        self.push_context();
+
+                        {
+                            self.scoop_begin(); // no end scoop
+
+                            let context: Rc<CompileContext> = self.curr_context();
+                            context
+                                .function_name
+                                .replace(identifier_token.lexeme.clone());
+
+                            self.consume(TokenType::LeftParen, "Expect '(' after function name");
+                            if self.current.r#type != TokenType::RightParen {
+                                let curr_depth = *context.depth.borrow();
+                                let mut curr_variables = context.variables.borrow_mut();
+                                let curr_variable_map =
+                                    curr_variables.get_mut(&curr_depth).unwrap();
+
+                                loop {
+                                    *context.params_num.borrow_mut() += 1;
+                                    // define local variable
+                                    match self.r#match(TokenType::Identifier) {
+                                        true => {
+                                            match curr_variable_map
+                                                .contains_key(&self.previous.lexeme)
+                                            {
+                                                true => {
+                                                    self.throw_error(
+                                                        &identifier_token,
+                                                        "Redefined param in curr function",
+                                                    );
+                                                    break;
+                                                }
+                                                false => {
+                                                    curr_variable_map.insert(
+                                                        self.previous.lexeme.clone(),
+                                                        *context.local_count.borrow(),
+                                                    );
+                                                    *context.local_count.borrow_mut() += 1;
+                                                }
+                                            };
+                                        }
+                                        false => {
+                                            self.throw_error(
+                                                &self.current,
+                                                "Expect function param error",
+                                            );
+                                            break;
+                                        }
                                     }
-                                    false => {
-                                        self.throw_error(
-                                            &self.current,
-                                            "Expect function param error",
-                                        );
+                                    if !self.r#match(TokenType::Comma) {
                                         break;
                                     }
                                 }
-                                if !self.r#match(TokenType::Comma) {
-                                    break;
-                                }
                             }
+
+                            self.consume(TokenType::RightParen, "Expect ')' after parameters");
+
+                            self.consume(TokenType::LeftBrace, "Expect '{' before function body");
+                            self.block_statement();
                         }
-
-                        self.consume(TokenType::RightParen, "Expect ')' after parameters");
-
-                        self.consume(TokenType::LeftBrace, "Expect '{' before function body");
-                        self.block_statement();
 
                         let function: Function = self.compile_end();
 
-                        // OP function push value;
-                        let context: Rc<CompileContext> = self.curr_context();
-                        let curr_depth = *context.depth.borrow();
-                        context
-                            .chunk
-                            .borrow_mut()
-                            .write_code(OpCode::Function.into(), self.previous.line);
-                        let idx_option = context.chunk.borrow_mut().add_function(Rc::new(function));
-                        match idx_option {
-                            Ok(idx) => context
+                        {
+                            // OP function push value;
+                            let context: Rc<CompileContext> = self.curr_context();
+                            let curr_depth = *context.depth.borrow();
+                            context
                                 .chunk
                                 .borrow_mut()
-                                .write_code(idx as u8, self.previous.line),
-                            Err(e) => self.throw_error(&identifier_token, &e),
-                        };
+                                .write_code(OpCode::Function.into(), identifier_token.line);
+                            let idx_option =
+                                context.chunk.borrow_mut().add_function(Rc::new(function));
+                            match idx_option {
+                                Ok(idx) => context
+                                    .chunk
+                                    .borrow_mut()
+                                    .write_code(idx as u8, identifier_token.line),
+                                Err(e) => self.throw_error(&identifier_token, &e),
+                            };
 
-                        // OP define function as variable
-                        let mut curr_variables = context.variables.borrow_mut();
-                        let curr_variable_map = curr_variables.get_mut(&curr_depth).unwrap();
-
-                        match curr_depth {
-                            0 => {
-                                let global_slot = curr_variable_map.len();
+                            // OP define function as variable
+                            if curr_depth == 0 {
+                                let global_slot = context
+                                    .variables
+                                    .borrow()
+                                    .get(&0)
+                                    .unwrap()
+                                    .get(&identifier_token.lexeme)
+                                    .unwrap()
+                                    .clone();
                                 let idx_option =
                                     context.chunk.borrow_mut().add_variable(global_slot);
                                 match idx_option {
                                     Ok(idx) => {
-                                        curr_variable_map
-                                            .insert(identifier_token.lexeme, global_slot);
                                         context.chunk.borrow_mut().write_code(
                                             OpCode::DefineGlobal.into(),
                                             identifier_token.line,
@@ -726,11 +757,6 @@ impl Compiler {
                                     }
                                     Err(e) => self.throw_error(&identifier_token, &e),
                                 }
-                            }
-                            _ => {
-                                curr_variable_map
-                                    .insert(identifier_token.lexeme, *context.local_count.borrow());
-                                *context.local_count.borrow_mut() += 1;
                             }
                         }
                     }
